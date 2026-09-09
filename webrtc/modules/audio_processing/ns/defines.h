@@ -11,6 +11,28 @@
 #ifndef WEBRTC_MODULES_AUDIO_PROCESSING_NS_MAIN_SOURCE_DEFINES_H_
 #define WEBRTC_MODULES_AUDIO_PROCESSING_NS_MAIN_SOURCE_DEFINES_H_
 
+#include <math.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Freestanding math declarations missing in Zephyr minimal libc */
+float logf(float);
+float expf(float);
+float powf(float, float);
+double tanh(double);
+float tanhf(float);
+double log(double);
+double exp(double);
+double pow(double, double);
+double fabs(double);
+float fabsf(float);
+
+#ifdef __cplusplus
+}
+#endif
+
 #define BLOCKL_MAX          160 // max processing block length: 160
 #define ANAL_BLOCKL_MAX     256 // max analysis block length: 256
 #define HALF_ANAL_BLOCKL    129 // half max analysis block length + 1
