@@ -129,10 +129,16 @@ static void once(void (*func)(void)) {
   LeaveCriticalSection(&lock);
 }
 
-/* There's no fallback version as an #else block here to ensure thread safety.
- * In case of neither pthread for WEBRTC_POSIX nor _WIN32 is present, build
- * system should pick it up.
- */
+#else
+
+static void once(void (*func)(void)) {
+  static int done = 0;
+  if (!done) {
+    func();
+    done = 1;
+  }
+}
+
 #endif  /* WEBRTC_POSIX */
 
 void WebRtcSpl_Init() {
