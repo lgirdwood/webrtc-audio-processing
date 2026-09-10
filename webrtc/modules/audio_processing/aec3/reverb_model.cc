@@ -16,6 +16,7 @@
 #include <functional>
 
 #include "api/array_view.h"
+#include "modules/audio_processing/aec3/aec3_common.h"
 
 namespace webrtc {
 
@@ -34,10 +35,11 @@ void ReverbModel::UpdateReverbNoFreqShaping(
     float power_spectrum_scaling,
     float reverb_decay) {
   if (reverb_decay > 0) {
-    // Update the estimate of the reverberant power.
+    float combined_scale = FastFloatMul(power_spectrum_scaling, reverb_decay);
     for (size_t k = 0; k < power_spectrum.size(); ++k) {
-      reverb_[k] = (reverb_[k] + power_spectrum[k] * power_spectrum_scaling) *
-                   reverb_decay;
+      float a = FastFloatMul(reverb_[k], reverb_decay);
+      float b = FastFloatMul(power_spectrum[k], combined_scale);
+      reverb_[k] = FastFloatAddPos(a, b);
     }
   }
 }
@@ -47,11 +49,10 @@ void ReverbModel::UpdateReverb(
     rtc::ArrayView<const float> power_spectrum_scaling,
     float reverb_decay) {
   if (reverb_decay > 0) {
-    // Update the estimate of the reverberant power.
     for (size_t k = 0; k < power_spectrum.size(); ++k) {
-      reverb_[k] =
-          (reverb_[k] + power_spectrum[k] * power_spectrum_scaling[k]) *
-          reverb_decay;
+      float a = FastFloatMul(reverb_[k], reverb_decay);
+      float b = FastFloatMul(FastFloatMul(power_spectrum[k], power_spectrum_scaling[k]), reverb_decay);
+      reverb_[k] = FastFloatAddPos(a, b);
     }
   }
 }

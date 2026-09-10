@@ -52,10 +52,11 @@ void LimitHighFrequencyGains(bool conservative_hf_suppression,
 
     constexpr float oneByBandsInSum =
         1 / static_cast<float>(kUpperAccurateBandPlus1 - 20);
-    const float hf_gain_bound =
-        std::accumulate(gain->begin() + 20,
-                        gain->begin() + kUpperAccurateBandPlus1, 0.f) *
-        oneByBandsInSum;
+    float hf_gain_sum = 0.f;
+    for (size_t k = 20; k < kUpperAccurateBandPlus1; ++k) {
+      hf_gain_sum = FastFloatAddPos(hf_gain_sum, (*gain)[k]);
+    }
+    const float hf_gain_bound = FastFloatMul(hf_gain_sum, oneByBandsInSum);
 
     std::for_each(
         gain->begin() + kUpperAccurateBandPlus1, gain->end(),
@@ -74,11 +75,14 @@ void WeightEchoForAudibility(const EchoCanceller3Config& config,
                   rtc::ArrayView<const float> echo,
                   rtc::ArrayView<float> weighted_echo) {
     for (size_t k = begin; k < end; ++k) {
-      if (echo[k] < threshold) {
-        float tmp = (threshold - echo[k]) * normalizer;
-        weighted_echo[k] = echo[k] * std::max(0.f, 1.f - tmp * tmp);
+      float e = echo[k];
+      if (e <= 0.f) {
+        weighted_echo[k] = 0.f;
+      } else if (e < threshold) {
+        float tmp = FastFloatMul(threshold - e, normalizer);
+        weighted_echo[k] = FastFloatMul(e, std::max(0.f, 1.f - FastFloatSqr(tmp)));
       } else {
-        weighted_echo[k] = echo[k];
+        weighted_echo[k] = e;
       }
     }
   };
@@ -132,19 +136,21 @@ float SuppressionGain::UpperBandsGain(
   }
 
   // Compute the upper and lower band energies.
-  const auto sum_of_squares = [](float a, float b) { return a + b * b; };
   float low_band_energy = 0.f;
   for (int ch = 0; ch < num_render_channels; ++ch) {
-    const float channel_energy =
-        std::accumulate(render.begin(/*band=*/0, ch),
-                        render.end(/*band=*/0, ch), 0.0f, sum_of_squares);
+    float channel_energy = 0.f;
+    for (float sample : render.View(/*band=*/0, ch)) {
+      channel_energy = FastFloatAddPos(channel_energy, FastFloatSqr(sample));
+    }
     low_band_energy = std::max(low_band_energy, channel_energy);
   }
   float high_band_energy = 0.f;
   for (int k = 1; k < render.NumBands(); ++k) {
     for (int ch = 0; ch < num_render_channels; ++ch) {
-      const float energy = std::accumulate(
-          render.begin(k, ch), render.end(k, ch), 0.f, sum_of_squares);
+      float energy = 0.f;
+      for (float sample : render.View(k, ch)) {
+        energy = FastFloatAddPos(energy, FastFloatSqr(sample));
+      }
       high_band_energy = std::max(high_band_energy, energy);
     }
   }
@@ -161,10 +167,9 @@ float SuppressionGain::UpperBandsGain(
   } else {
     // In all other cases, bound the gain for upper frequencies.
     RTC_DCHECK_LE(low_band_energy, high_band_energy);
-    RTC_DCHECK_NE(0.f, high_band_energy);
-    anti_howling_gain =
-        config_.suppressor.high_bands_suppression.anti_howling_gain *
-        sqrtf(low_band_energy / high_band_energy);
+    anti_howling_gain = FastFloatMul(
+        config_.suppressor.high_bands_suppression.anti_howling_gain,
+        FastFloatSqrt(FastFloatDiv(low_band_energy, high_band_energy)));
   }
 
   float gain_bound = 1.f;
@@ -173,7 +178,11 @@ float SuppressionGain::UpperBandsGain(
     const auto& cfg = config_.suppressor.high_bands_suppression;
     auto low_frequency_energy = [](rtc::ArrayView<const float> spectrum) {
       RTC_DCHECK_LE(16, spectrum.size());
-      return std::accumulate(spectrum.begin() + 1, spectrum.begin() + 16, 0.f);
+      float s = 0.f;
+      for (size_t i = 1; i < 16; ++i) {
+        s = FastFloatAddPos(s, spectrum[i]);
+      }
+      return s;
     };
     for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
       const float echo_sum = low_frequency_energy(echo_spectrum[ch]);
@@ -198,14 +207,27 @@ void SuppressionGain::GainToNoAudibleEcho(
   const auto& p = dominant_nearend_detector_->IsNearendState() ? nearend_params_
                                                                : normal_params_;
   for (size_t k = 0; k < gain->size(); ++k) {
-    float enr = echo[k] / (nearend[k] + 1.f);  // Echo-to-nearend ratio.
-    float emr = echo[k] / (masker[k] + 1.f);   // Echo-to-masker (noise) ratio.
-    float g = 1.0f;
-    if (enr > p.enr_transparent_[k] && emr > p.emr_transparent_[k]) {
-      g = (p.enr_suppress_[k] - enr) /
-          (p.enr_suppress_[k] - p.enr_transparent_[k]);
-      g = std::max(g, p.emr_transparent_[k] / emr);
+    float e_k = echo[k];
+    if (e_k <= 0.0f) {
+      (*gain)[k] = 1.0f;
+      continue;
     }
+    float ne_den = FastFloatAddPos(nearend[k], 1.f);
+    float ne_thresh = FastFloatMul(p.enr_transparent_[k], ne_den);
+    if (e_k <= ne_thresh) {
+      (*gain)[k] = 1.0f;
+      continue;
+    }
+    float mask_den = FastFloatAddPos(masker[k], 1.f);
+    float mask_thresh = FastFloatMul(p.emr_transparent_[k], mask_den);
+    if (e_k <= mask_thresh) {
+      (*gain)[k] = 1.0f;
+      continue;
+    }
+    float enr = FastFloatDiv(e_k, ne_den);
+    float emr = FastFloatDiv(e_k, mask_den);
+    float g = (p.enr_suppress_[k] - enr) * p.one_by_enr_range_[k];
+    g = std::max(g, FastFloatDiv(p.emr_transparent_[k], emr));
     (*gain)[k] = g;
   }
 }
@@ -225,10 +247,8 @@ void SuppressionGain::GetMinGain(
                          : config_.echo_audibility.normal_render_limit;
 
     for (size_t k = 0; k < min_gain.size(); ++k) {
-      min_gain[k] = weighted_residual_echo[k] > 0.f
-                        ? min_echo_power / weighted_residual_echo[k]
-                        : 1.f;
-      min_gain[k] = std::min(min_gain[k], 1.f);
+      float w = weighted_residual_echo[k];
+      min_gain[k] = (w > min_echo_power) ? FastFloatDiv(min_echo_power, w) : 1.f;
     }
 
     if (!initial_state_ ||
@@ -318,7 +338,13 @@ void SuppressionGain::LowerBandGain(
   std::copy(gain->begin(), gain->end(), last_gain_.begin());
 
   // Transform gains to amplitude domain.
-  aec3::VectorMath(optimization_).Sqrt(*gain);
+  for (float& g : *gain) {
+    if (g < 0.99f) {
+      g = FastFloatSqrt(g);
+    } else {
+      g = 1.0f;
+    }
+  }
 }
 
 SuppressionGain::SuppressionGain(const EchoCanceller3Config& config,
@@ -421,17 +447,17 @@ bool SuppressionGain::LowNoiseRenderDetector::Detect(const Block& render) {
   float x2_max = 0.f;
   for (int ch = 0; ch < render.NumChannels(); ++ch) {
     for (float x_k : render.View(/*band=*/0, ch)) {
-      const float x2 = x_k * x_k;
-      x2_sum += x2;
+      const float x2 = FastFloatSqr(x_k);
+      x2_sum = FastFloatAddPos(x2_sum, x2);
       x2_max = std::max(x2_max, x2);
     }
   }
-  x2_sum = x2_sum / render.NumChannels();
+  x2_sum = FastFloatDiv(x2_sum, static_cast<float>(render.NumChannels()));
 
   constexpr float kThreshold = 50.f * 50.f * 64.f;
   const bool low_noise_render =
       average_power_ < kThreshold && x2_max < 3 * average_power_;
-  average_power_ = average_power_ * 0.9f + x2_sum * 0.1f;
+  average_power_ = FastFloatAddPos(FastFloatMul(average_power_, 0.9f), FastFloatMul(x2_sum, 0.1f));
   return low_noise_render;
 }
 
@@ -459,6 +485,7 @@ SuppressionGain::GainParameters::GainParameters(
     enr_transparent_[k] = (1 - a) * lf.enr_transparent + a * hf.enr_transparent;
     enr_suppress_[k] = (1 - a) * lf.enr_suppress + a * hf.enr_suppress;
     emr_transparent_[k] = (1 - a) * lf.emr_transparent + a * hf.emr_transparent;
+    one_by_enr_range_[k] = 1.0f / (enr_suppress_[k] - enr_transparent_[k]);
   }
 }
 

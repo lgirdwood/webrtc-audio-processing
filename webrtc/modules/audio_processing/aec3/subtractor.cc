@@ -38,13 +38,19 @@ void PredictionError(const Aec3Fft& fft,
   std::array<float, kFftLength> tmp;
   fft.Ifft(S, &tmp);
   constexpr float kScale = 1.0f / kFftLengthBy2;
-  std::transform(y.begin(), y.end(), tmp.begin() + kFftLengthBy2, e->begin(),
-                 [&](float a, float b) { return a - b * kScale; });
-
-  if (s) {
-    for (size_t k = 0; k < s->size(); ++k) {
-      (*s)[k] = kScale * tmp[k + kFftLengthBy2];
+  const float* tmp_sub = &tmp[kFftLengthBy2];
+  for (size_t k = 0; k < kBlockSize; ++k) {
+    union { float f; uint32_t u; } pun;
+    pun.f = tmp_sub[k];
+    uint32_t exp = (pun.u >> 23) & 0xff;
+    if (exp > 6) {
+      pun.u -= (6 << 23);
+    } else {
+      pun.f = 0.0f;
     }
+    float sk = pun.f;
+    if (s) (*s)[k] = sk;
+    (*e)[k] = y[k] - sk;
   }
 }
 
@@ -218,8 +224,13 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
     refined_filters_[ch]->Filter(render_buffer, &S);
     PredictionError(fft_, S, y, &e_refined, &output.s_refined);
 
-    coarse_filter_[ch]->Filter(render_buffer, &S);
-    PredictionError(fft_, S, y, &e_coarse, &output.s_coarse);
+    if (config_.filter.enable_coarse_filter_output_usage) {
+      coarse_filter_[ch]->Filter(render_buffer, &S);
+      PredictionError(fft_, S, y, &e_coarse, &output.s_coarse);
+    } else {
+      e_coarse = e_refined;
+      output.s_coarse = output.s_refined;
+    }
 
     // Compute the signal powers in the subtractor output.
     output.ComputeMetrics(y);
@@ -240,10 +251,15 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
 
     // Compute the FFts of the refined and coarse filter outputs.
     fft_.ZeroPaddedFft(e_refined, Aec3Fft::Window::kHanning, &E_refined);
-    fft_.ZeroPaddedFft(e_coarse, Aec3Fft::Window::kHanning, &E_coarse);
+    if (config_.filter.enable_coarse_filter_output_usage) {
+      fft_.ZeroPaddedFft(e_coarse, Aec3Fft::Window::kHanning, &E_coarse);
+      E_coarse.Spectrum(optimization_, output.E2_coarse);
+    } else {
+      E_coarse = E_refined;
+      output.E2_coarse = output.E2_refined;
+    }
 
     // Compute spectra for future use.
-    E_coarse.Spectrum(optimization_, output.E2_coarse);
     E_refined.Spectrum(optimization_, output.E2_refined);
 
     // Update the refined filter.
@@ -276,33 +292,35 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
     }
 
     // Update the coarse filter.
-    poor_coarse_filter_counters_[ch] =
-        output.e2_refined < output.e2_coarse
-            ? poor_coarse_filter_counters_[ch] + 1
-            : 0;
-    if (poor_coarse_filter_counters_[ch] < 5) {
-      coarse_gains_[ch]->Compute(X2_coarse, render_signal_analyzer, E_coarse,
-                                 coarse_filter_[ch]->SizePartitions(),
-                                 aec_state.SaturatedCapture(), &G);
-      coarse_filter_reset_hangover_[ch] =
-          std::max(coarse_filter_reset_hangover_[ch] - 1, 0);
-    } else {
-      poor_coarse_filter_counters_[ch] = 0;
-      coarse_filter_[ch]->SetFilter(refined_filters_[ch]->SizePartitions(),
-                                    refined_filters_[ch]->GetFilter());
-      coarse_gains_[ch]->Compute(X2_coarse, render_signal_analyzer, E_refined,
-                                 coarse_filter_[ch]->SizePartitions(),
-                                 aec_state.SaturatedCapture(), &G);
-      coarse_filter_reset_hangover_[ch] =
-          config_.filter.coarse_reset_hangover_blocks;
-    }
+    if (config_.filter.enable_coarse_filter_output_usage) {
+      poor_coarse_filter_counters_[ch] =
+          output.e2_refined < output.e2_coarse
+              ? poor_coarse_filter_counters_[ch] + 1
+              : 0;
+      if (poor_coarse_filter_counters_[ch] < 5) {
+        coarse_gains_[ch]->Compute(X2_coarse, render_signal_analyzer, E_coarse,
+                                   coarse_filter_[ch]->SizePartitions(),
+                                   aec_state.SaturatedCapture(), &G);
+        coarse_filter_reset_hangover_[ch] =
+            std::max(coarse_filter_reset_hangover_[ch] - 1, 0);
+      } else {
+        poor_coarse_filter_counters_[ch] = 0;
+        coarse_filter_[ch]->SetFilter(refined_filters_[ch]->SizePartitions(),
+                                      refined_filters_[ch]->GetFilter());
+        coarse_gains_[ch]->Compute(X2_coarse, render_signal_analyzer, E_refined,
+                                   coarse_filter_[ch]->SizePartitions(),
+                                   aec_state.SaturatedCapture(), &G);
+        coarse_filter_reset_hangover_[ch] =
+            config_.filter.coarse_reset_hangover_blocks;
+      }
 
-    if (ApmDataDumper::IsAvailable()) {
-      RTC_DCHECK_LT(ch, coarse_impulse_responses_.size());
-      coarse_filter_[ch]->Adapt(render_buffer, G,
-                                &coarse_impulse_responses_[ch]);
-    } else {
-      coarse_filter_[ch]->Adapt(render_buffer, G);
+      if (ApmDataDumper::IsAvailable()) {
+        RTC_DCHECK_LT(ch, coarse_impulse_responses_.size());
+        coarse_filter_[ch]->Adapt(render_buffer, G,
+                                  &coarse_impulse_responses_[ch]);
+      } else {
+        coarse_filter_[ch]->Adapt(render_buffer, G);
+      }
     }
 
     if (ch == 0) {

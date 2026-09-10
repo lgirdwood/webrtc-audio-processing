@@ -210,10 +210,10 @@ void AecState::Update(
   // Update render counters.
   bool active_render = false;
   for (int ch = 0; ch < aligned_render_block.NumChannels(); ++ch) {
-    const float render_energy =
-        std::inner_product(aligned_render_block.begin(/*block=*/0, ch),
-                           aligned_render_block.end(/*block=*/0, ch),
-                           aligned_render_block.begin(/*block=*/0, ch), 0.f);
+    float render_energy = 0.f;
+    for (float sample : aligned_render_block.View(/*band=*/0, ch)) {
+      render_energy = FastFloatAddPos(render_energy, FastFloatSqr(sample));
+    }
     if (render_energy > (config_.render_levels.active_render_limit *
                          config_.render_levels.active_render_limit) *
                             kFftLengthBy2) {

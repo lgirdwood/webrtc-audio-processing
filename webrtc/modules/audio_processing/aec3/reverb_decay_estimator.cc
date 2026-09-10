@@ -88,16 +88,13 @@ ReverbDecayEstimator::ReverbDecayEstimator(const EchoCanceller3Config& config)
     : filter_length_blocks_(config.filter.refined.length_blocks),
       filter_length_coefficients_(GetTimeDomainLength(filter_length_blocks_)),
       use_adaptive_echo_decay_(config.ep_strength.default_len < 0.f),
-      early_reverb_estimator_(config.filter.refined.length_blocks -
-                              kEarlyReverbMinSizeBlocks),
-      late_reverb_start_(kEarlyReverbMinSizeBlocks),
-      late_reverb_end_(kEarlyReverbMinSizeBlocks),
+      early_reverb_estimator_(std::max(0, static_cast<int>(config.filter.refined.length_blocks) -
+                              kEarlyReverbMinSizeBlocks)),
+      late_reverb_start_(std::min(static_cast<int>(config.filter.refined.length_blocks), kEarlyReverbMinSizeBlocks)),
+      late_reverb_end_(std::min(static_cast<int>(config.filter.refined.length_blocks), kEarlyReverbMinSizeBlocks)),
       previous_gains_(config.filter.refined.length_blocks, 0.f),
       decay_(std::fabs(config.ep_strength.default_len)),
-      mild_decay_(std::fabs(config.ep_strength.nearend_len)) {
-  RTC_DCHECK_GT(config.filter.refined.length_blocks,
-                static_cast<size_t>(kEarlyReverbMinSizeBlocks));
-}
+      mild_decay_(std::fabs(config.ep_strength.nearend_len)) {}
 
 ReverbDecayEstimator::~ReverbDecayEstimator() = default;
 
@@ -304,7 +301,7 @@ float ReverbDecayEstimator::LateReverbLinearRegressor::Estimate() {
 
 ReverbDecayEstimator::EarlyReverbLengthEstimator::EarlyReverbLengthEstimator(
     int max_blocks)
-    : numerators_smooth_(max_blocks - kBlocksPerSection, 0.f),
+    : numerators_smooth_(std::max(0, max_blocks - kBlocksPerSection), 0.f),
       numerators_(numerators_smooth_.size(), 0.f),
       coefficients_counter_(0) {
   RTC_DCHECK_LE(0, max_blocks);
@@ -322,6 +319,9 @@ void ReverbDecayEstimator::EarlyReverbLengthEstimator::Reset() {
 void ReverbDecayEstimator::EarlyReverbLengthEstimator::Accumulate(
     float value,
     float smoothing) {
+  if (numerators_.empty()) {
+    return;
+  }
   // Each section is composed by kBlocksPerSection blocks and each section
   // overlaps with the next one in (kBlocksPerSection - 1) blocks. For example,
   // the first section covers the blocks [0:5], the second covers the blocks

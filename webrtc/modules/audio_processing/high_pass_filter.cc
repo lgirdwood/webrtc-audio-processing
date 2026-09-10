@@ -11,7 +11,7 @@
 #include "modules/audio_processing/high_pass_filter.h"
 
 #include "api/array_view.h"
-#include "modules/audio_processing/audio_buffer.h"
+#include "modules/audio_processing/aec3_buffer/audio_buffer.h"
 #include "rtc_base/checks.h"
 
 namespace webrtc {

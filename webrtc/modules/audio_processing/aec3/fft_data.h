@@ -70,8 +70,9 @@ struct FftData {
         break;
 #endif
       default:
-        std::transform(re.begin(), re.end(), im.begin(), power_spectrum.begin(),
-                       [](float a, float b) { return a * a + b * b; });
+        for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+          power_spectrum[k] = FastMagSqr(re[k], im[k]);
+        }
     }
   }
 

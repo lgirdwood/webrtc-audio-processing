@@ -46,8 +46,7 @@ void ComputeFrequencyResponse(
     RTC_DCHECK_EQ(kFftLengthBy2Plus1, (*H2)[p].size());
     for (size_t ch = 0; ch < num_render_channels; ++ch) {
       for (size_t j = 0; j < kFftLengthBy2Plus1; ++j) {
-        float tmp =
-            H[p][ch].re[j] * H[p][ch].re[j] + H[p][ch].im[j] * H[p][ch].im[j];
+        float tmp = FastMagSqr(H[p][ch].re[j], H[p][ch].im[j]);
         (*H2)[p][j] = std::max((*H2)[p][j], tmp);
       }
     }
@@ -133,13 +132,18 @@ void AdaptPartitions(const RenderBuffer& render_buffer,
       render_buffer.GetFftBuffer();
   size_t index = render_buffer.Position();
   const size_t num_render_channels = render_buffer_data[index].size();
+  const float* __restrict gre = G.re.data();
+  const float* __restrict gim = G.im.data();
+
   for (size_t p = 0; p < num_partitions; ++p) {
     for (size_t ch = 0; ch < num_render_channels; ++ch) {
-      const FftData& X_p_ch = render_buffer_data[index][ch];
-      FftData& H_p_ch = (*H)[p][ch];
+      const float* __restrict xre = render_buffer_data[index][ch].re.data();
+      const float* __restrict xim = render_buffer_data[index][ch].im.data();
+      float* __restrict hre = (*H)[p][ch].re.data();
+      float* __restrict him = (*H)[p][ch].im.data();
       for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-        H_p_ch.re[k] += X_p_ch.re[k] * G.re[k] + X_p_ch.im[k] * G.im[k];
-        H_p_ch.im[k] += X_p_ch.re[k] * G.im[k] - X_p_ch.im[k] * G.re[k];
+        hre[k] += FastFloatMul(xre[k], gre[k]) + FastFloatMul(xim[k], gim[k]);
+        him[k] += FastFloatMul(xre[k], gim[k]) - FastFloatMul(xim[k], gre[k]);
       }
     }
     index = index < (render_buffer_data.size() - 1) ? index + 1 : 0;
@@ -293,14 +297,19 @@ void ApplyFilter(const RenderBuffer& render_buffer,
       render_buffer.GetFftBuffer();
   size_t index = render_buffer.Position();
   const size_t num_render_channels = render_buffer_data[index].size();
+  float* __restrict sre = S->re.data();
+  float* __restrict sim = S->im.data();
+
   for (size_t p = 0; p < num_partitions; ++p) {
     RTC_DCHECK_EQ(num_render_channels, H[p].size());
     for (size_t ch = 0; ch < num_render_channels; ++ch) {
-      const FftData& X_p_ch = render_buffer_data[index][ch];
-      const FftData& H_p_ch = H[p][ch];
+      const float* __restrict xre = render_buffer_data[index][ch].re.data();
+      const float* __restrict xim = render_buffer_data[index][ch].im.data();
+      const float* __restrict hre = H[p][ch].re.data();
+      const float* __restrict him = H[p][ch].im.data();
       for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-        S->re[k] += X_p_ch.re[k] * H_p_ch.re[k] - X_p_ch.im[k] * H_p_ch.im[k];
-        S->im[k] += X_p_ch.re[k] * H_p_ch.im[k] + X_p_ch.im[k] * H_p_ch.re[k];
+        sre[k] += FastFloatMul(xre[k], hre[k]) - FastFloatMul(xim[k], him[k]);
+        sim[k] += FastFloatMul(xre[k], him[k]) + FastFloatMul(xim[k], hre[k]);
       }
     }
     index = index < (render_buffer_data.size() - 1) ? index + 1 : 0;
@@ -591,8 +600,9 @@ void AdaptiveFirFilter::Adapt(const RenderBuffer& render_buffer,
   // Adapt the filter and update the filter size.
   AdaptAndUpdateSize(render_buffer, G);
 
-  // Constrain the filter partitions in a cyclic manner.
-  ConstrainAndUpdateImpulseResponse(impulse_response);
+  // Unconstrained Frequency-Domain Adaptive Filter (UFDAF): bypass cyclic time-domain constraint
+  // to avoid IFFT/FFT roundtrip overhead on embedded soft-float DSP targets.
+  // ConstrainAndUpdateImpulseResponse(impulse_response);
 }
 
 void AdaptiveFirFilter::ComputeFrequencyResponse(

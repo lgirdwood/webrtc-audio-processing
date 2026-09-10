@@ -96,9 +96,9 @@ void Aec3Fft::ZeroPaddedFft(rtc::ArrayView<const float> x,
       std::copy(x.begin(), x.end(), fft.begin() + kFftLengthBy2);
       break;
     case Window::kHanning:
-      std::transform(x.begin(), x.end(), std::begin(kHanning64),
-                     fft.begin() + kFftLengthBy2,
-                     [](float a, float b) { return a * b; });
+      for (size_t i = 0; i < kFftLengthBy2; ++i) {
+        fft[i + kFftLengthBy2] = FastFloatMul(x[i], kHanning64[i]);
+      }
       break;
     case Window::kSqrtHanning:
       RTC_DCHECK_NOTREACHED();
@@ -128,11 +128,10 @@ void Aec3Fft::PaddedFft(rtc::ArrayView<const float> x,
       RTC_DCHECK_NOTREACHED();
       break;
     case Window::kSqrtHanning:
-      std::transform(x_old.begin(), x_old.end(), std::begin(kSqrtHanning128),
-                     fft.begin(), std::multiplies<float>());
-      std::transform(x.begin(), x.end(),
-                     std::begin(kSqrtHanning128) + x_old.size(),
-                     fft.begin() + x_old.size(), std::multiplies<float>());
+      for (size_t i = 0; i < kFftLengthBy2; ++i) {
+        fft[i] = FastFloatMul(x_old[i], kSqrtHanning128[i]);
+        fft[i + kFftLengthBy2] = FastFloatMul(x[i], kSqrtHanning128[i + kFftLengthBy2]);
+      }
       break;
     default:
       RTC_DCHECK_NOTREACHED();

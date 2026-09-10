@@ -69,13 +69,15 @@ std::string FindFullName(absl::string_view name);
 // starts with "Enabled".
 // TODO(tommi): Make sure all implementations support this.
 inline bool IsEnabled(absl::string_view name) {
-  return FindFullName(name).find("Enabled") == 0;
+  (void)name;
+  return false;
 }
 
 // Convenience method, returns true iff FindFullName(name) return a string that
 // starts with "Disabled".
 inline bool IsDisabled(absl::string_view name) {
-  return FindFullName(name).find("Disabled") == 0;
+  (void)name;
+  return false;
 }
 
 // Optionally initialize field trial from a string.

@@ -12,8 +12,106 @@
 #define MODULES_AUDIO_PROCESSING_AEC3_AEC3_COMMON_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
 namespace webrtc {
+
+static inline float FastFloatSqr(float x) {
+  union { float f; uint32_t u; } pun;
+  pun.f = x;
+  uint32_t u = pun.u;
+  int exp = (u >> 23) & 0xff;
+  if (exp == 0) return 0.0f;
+  uint64_t m = (1ULL << 23) | (u & 0x7fffff);
+  uint64_t m_sq = (m * m) >> 23;
+  int new_exp = 2 * exp - 127;
+  if (m_sq & (1ULL << 24)) {
+    m_sq >>= 1;
+    new_exp += 1;
+  }
+  if (new_exp <= 0) return 0.0f;
+  if (new_exp >= 255) new_exp = 254;
+  pun.u = ((uint32_t)new_exp << 23) | (uint32_t)(m_sq & 0x7fffff);
+  return pun.f;
+}
+
+static inline float FastFloatAddPos(float a, float b) {
+  union { float f; uint32_t u; } pa, pb, pr;
+  pa.f = a; pb.f = b;
+  if (pa.u < pb.u) { uint32_t tmp = pa.u; pa.u = pb.u; pb.u = tmp; }
+  if (pb.u == 0) return pa.f;
+  int exp_a = (pa.u >> 23) & 0xff;
+  int exp_b = (pb.u >> 23) & 0xff;
+  int diff = exp_a - exp_b;
+  if (diff > 24) return pa.f;
+  uint32_t ma = (1U << 23) | (pa.u & 0x7fffff);
+  uint32_t mb = (1U << 23) | (pb.u & 0x7fffff);
+  uint32_t m_sum = ma + (mb >> diff);
+  int new_exp = exp_a;
+  if (m_sum & (1U << 24)) {
+    m_sum >>= 1;
+    new_exp++;
+  }
+  if (new_exp >= 255) new_exp = 254;
+  pr.u = ((uint32_t)new_exp << 23) | (m_sum & 0x7fffff);
+  return pr.f;
+}
+
+static inline float FastMagSqr(float re, float im) {
+  return FastFloatAddPos(FastFloatSqr(re), FastFloatSqr(im));
+}
+
+static inline float FastFloatMul(float a, float b) {
+  union { float f; uint32_t u; } pa, pb, pr;
+  pa.f = a; pb.f = b;
+  uint32_t sign = (pa.u ^ pb.u) & 0x80000000;
+  int exp_a = (pa.u >> 23) & 0xff;
+  int exp_b = (pb.u >> 23) & 0xff;
+  if (exp_a == 0 || exp_b == 0) return 0.0f;
+  int new_exp = exp_a + exp_b - 127;
+  uint64_t ma = (1ULL << 23) | (pa.u & 0x7fffff);
+  uint64_t mb = (1ULL << 23) | (pb.u & 0x7fffff);
+  uint64_t prod = (ma * mb) >> 23;
+  if (prod & (1ULL << 24)) {
+    prod >>= 1;
+    new_exp++;
+  }
+  if (new_exp <= 0) return 0.0f;
+  if (new_exp >= 255) new_exp = 254;
+  pr.u = sign | ((uint32_t)new_exp << 23) | (uint32_t)(prod & 0x7fffff);
+  return pr.f;
+}
+
+static inline float FastFloatInv(float x) {
+  union { float f; uint32_t u; } conv, px;
+  conv.f = x;
+  uint32_t sign = conv.u & 0x80000000;
+  conv.u &= 0x7fffffff;
+  if (conv.u == 0) return 0.0f;
+  conv.u = 0x7ef311c3 - conv.u;
+  float y = conv.f;
+  px.f = x; px.u &= 0x7fffffff;
+  float ax = px.f;
+  float axy = FastFloatMul(ax, y);
+  y = FastFloatMul(y, 2.0f - axy);
+  axy = FastFloatMul(ax, y);
+  y = FastFloatMul(y, 2.0f - axy);
+  conv.f = y;
+  conv.u |= sign;
+  return conv.f;
+}
+
+static inline float FastFloatDiv(float num, float den) {
+  return FastFloatMul(num, FastFloatInv(den));
+}
+
+static inline float FastFloatSqrt(float x) {
+  union { float f; uint32_t u; } conv;
+  conv.f = x;
+  if (conv.u <= 0x007fffff) return 0.0f;
+  conv.u = 0x1fbd1df5 + (conv.u >> 1);
+  return conv.f;
+}
 
 #ifdef _MSC_VER /* visual c++ */
 #define ALIGN16_BEG __declspec(align(16))

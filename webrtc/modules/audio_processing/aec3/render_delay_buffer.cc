@@ -376,7 +376,9 @@ void RenderDelayBufferImpl::AlignFromExternalDelay() {
                           *external_audio_buffer_delay_;
     const int64_t delay_with_headroom =
         delay - config_.delay.delay_headroom_samples / kBlockSize;
-    ApplyTotalDelay(delay_with_headroom);
+    const int clamped_delay = std::min(static_cast<int64_t>(MaxDelay()),
+                                       std::max(delay_with_headroom, static_cast<int64_t>(0)));
+    ApplyTotalDelay(clamped_delay);
   }
 }
 
@@ -411,12 +413,14 @@ void RenderDelayBufferImpl::InsertBlock(const Block& block,
     }
   }
 
-  std::array<float, kBlockSize> downmixed_render;
-  render_mixer_.ProduceOutput(b.buffer[b.write], downmixed_render);
-  render_decimator_.Decimate(downmixed_render, ds);
-  data_dumper_->DumpWav("aec3_render_decimator_output", ds.size(), ds.data(),
-                        16000 / down_sampling_factor_, 1);
-  std::copy(ds.rbegin(), ds.rend(), lr.buffer.begin() + lr.write);
+  if (!config_.delay.use_external_delay_estimator) {
+    std::array<float, kBlockSize> downmixed_render;
+    render_mixer_.ProduceOutput(b.buffer[b.write], downmixed_render);
+    render_decimator_.Decimate(downmixed_render, ds);
+    data_dumper_->DumpWav("aec3_render_decimator_output", ds.size(), ds.data(),
+                          16000 / down_sampling_factor_, 1);
+    std::copy(ds.rbegin(), ds.rend(), lr.buffer.begin() + lr.write);
+  }
   for (int channel = 0; channel < b.buffer[b.write].NumChannels(); ++channel) {
     fft_.PaddedFft(b.buffer[b.write].View(/*band=*/0, channel),
                    b.buffer[previous_write].View(/*band=*/0, channel),

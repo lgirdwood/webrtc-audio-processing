@@ -44,7 +44,8 @@ class FrameBlocker {
  private:
   const size_t num_bands_;
   const size_t num_channels_;
-  std::vector<std::vector<std::vector<float>>> buffer_;
+  std::vector<float> buffer_data_;
+  std::vector<size_t> buffer_size_;
 };
 }  // namespace webrtc
 

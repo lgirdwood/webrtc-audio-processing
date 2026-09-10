@@ -35,9 +35,12 @@ struct DownsampledRenderBuffer {
   }
 
   int OffsetIndex(int index, int offset) const {
-    RTC_DCHECK_GE(buffer.size(), offset);
     RTC_DCHECK_EQ(buffer.size(), static_cast<size_t>(size));
-    return (size + index + offset) % size;
+    int val = (index + offset) % size;
+    if (val < 0) {
+      val += size;
+    }
+    return val;
   }
 
   void UpdateWriteIndex(int offset) { write = OffsetIndex(write, offset); }

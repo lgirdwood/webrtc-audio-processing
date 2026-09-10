@@ -21,6 +21,7 @@
 #include <emmintrin.h>
 #endif
 #include <math.h>
+#include <stdint.h>
 
 #include <algorithm>
 #include <array>

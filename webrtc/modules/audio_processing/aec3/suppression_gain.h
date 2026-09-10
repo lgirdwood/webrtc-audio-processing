@@ -117,6 +117,7 @@ class SuppressionGain {
     std::array<float, kFftLengthBy2Plus1> enr_transparent_;
     std::array<float, kFftLengthBy2Plus1> enr_suppress_;
     std::array<float, kFftLengthBy2Plus1> emr_transparent_;
+    std::array<float, kFftLengthBy2Plus1> one_by_enr_range_;
   };
 
   static std::atomic<int> instance_count_;

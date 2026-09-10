@@ -54,6 +54,10 @@ class ComfortNoiseGenerator {
                rtc::ArrayView<FftData> lower_band_noise,
                rtc::ArrayView<FftData> upper_band_noise);
 
+  // Generates the comfort noise when suppression is active.
+  void GenerateComfortNoise(rtc::ArrayView<FftData> lower_band_noise,
+                            rtc::ArrayView<FftData> upper_band_noise);
+
   // Returns the estimate of the background noise spectrum.
   rtc::ArrayView<const std::array<float, kFftLengthBy2Plus1>> NoiseSpectrum()
       const {

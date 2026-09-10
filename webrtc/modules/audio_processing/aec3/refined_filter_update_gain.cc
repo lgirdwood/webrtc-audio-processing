@@ -117,18 +117,17 @@ void RefinedFilterUpdateGain::Compute(
 
     // G = mu * E.
     for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-      G->re[k] = mu[k] * E_refined.re[k];
-      G->im[k] = mu[k] * E_refined.im[k];
+      G->re[k] = FastFloatMul(mu[k], E_refined.re[k]);
+      G->im[k] = FastFloatMul(mu[k], E_refined.im[k]);
     }
   }
 
   // H_error = H_error + factor * erl.
   for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-    if (E2_refined[k] <= E2_coarse[k] || disallow_leakage_diverged) {
-      H_error_[k] += current_config_.leakage_converged * erl[k];
-    } else {
-      H_error_[k] += current_config_.leakage_diverged * erl[k];
-    }
+    float leakage = (E2_refined[k] <= E2_coarse[k] || disallow_leakage_diverged)
+                        ? current_config_.leakage_converged
+                        : current_config_.leakage_diverged;
+    H_error_[k] += FastFloatMul(leakage, erl[k]);
 
     H_error_[k] = std::max(H_error_[k], current_config_.error_floor);
     H_error_[k] = std::min(H_error_[k], current_config_.error_ceil);

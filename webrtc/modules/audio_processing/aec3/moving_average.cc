@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <functional>
 
+#include "modules/audio_processing/aec3/aec3_common.h"
 #include "rtc_base/checks.h"
 
 namespace webrtc {
@@ -33,26 +34,43 @@ MovingAverage::~MovingAverage() = default;
 
 void MovingAverage::Average(rtc::ArrayView<const float> input,
                             rtc::ArrayView<float> output) {
-  RTC_DCHECK(input.size() == num_elem_);
-  RTC_DCHECK(output.size() == num_elem_);
+  RTC_DCHECK_EQ(input.size(), num_elem_);
+  RTC_DCHECK_EQ(output.size(), num_elem_);
 
-  // Sum all contributions.
-  std::copy(input.begin(), input.end(), output.begin());
-  for (auto i = memory_.begin(); i < memory_.end(); i += num_elem_) {
-    std::transform(i, i + num_elem_, output.begin(), output.begin(),
-                   std::plus<float>());
+  if (mem_len_ == 0) {
+    std::copy(input.begin(), input.end(), output.begin());
+    return;
   }
 
-  // Divide by mem_len_.
-  for (float& o : output) {
-    o *= scaling_;
+  const float* in = input.data();
+  float* out = output.data();
+  float* cur_mem = &memory_[mem_index_ * num_elem_];
+
+  if (mem_len_ == 3) {
+    const float* m0 = &memory_[0];
+    const float* m1 = &memory_[num_elem_];
+    const float* m2 = &memory_[num_elem_ * 2];
+    for (size_t k = 0; k < num_elem_; ++k) {
+      float v = in[k];
+      float s = FastFloatAddPos(FastFloatAddPos(FastFloatAddPos(v, m0[k]), m1[k]), m2[k]);
+      cur_mem[k] = v;
+      out[k] = FastFloatMul(s, scaling_);
+    }
+  } else {
+    for (size_t k = 0; k < num_elem_; ++k) {
+      float v = in[k];
+      float s = v;
+      for (size_t m = 0; m < mem_len_; ++m) {
+        s = FastFloatAddPos(s, memory_[m * num_elem_ + k]);
+      }
+      cur_mem[k] = v;
+      out[k] = FastFloatMul(s, scaling_);
+    }
   }
 
-  // Update memory.
-  if (mem_len_ > 0) {
-    std::copy(input.begin(), input.end(),
-              memory_.begin() + mem_index_ * num_elem_);
-    mem_index_ = (mem_index_ + 1) % mem_len_;
+  mem_index_ = (mem_index_ + 1);
+  if (mem_index_ >= mem_len_) {
+    mem_index_ = 0;
   }
 }
 

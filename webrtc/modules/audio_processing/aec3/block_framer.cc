@@ -10,6 +10,7 @@
 
 #include "modules/audio_processing/aec3/block_framer.h"
 
+#include <cstring>
 #include <algorithm>
 
 #include "modules/audio_processing/aec3/aec3_common.h"
@@ -20,10 +21,8 @@ namespace webrtc {
 BlockFramer::BlockFramer(size_t num_bands, size_t num_channels)
     : num_bands_(num_bands),
       num_channels_(num_channels),
-      buffer_(num_bands_,
-              std::vector<std::vector<float>>(
-                  num_channels,
-                  std::vector<float>(kBlockSize, 0.f))) {
+      buffer_data_(num_bands * num_channels * kBlockSize, 0.f),
+      buffer_size_(num_bands * num_channels, kBlockSize) {
   RTC_DCHECK_LT(0, num_bands);
   RTC_DCHECK_LT(0, num_channels);
 }
@@ -39,11 +38,12 @@ void BlockFramer::InsertBlock(const Block& block) {
   RTC_DCHECK_EQ(num_channels_, block.NumChannels());
   for (size_t band = 0; band < num_bands_; ++band) {
     for (size_t channel = 0; channel < num_channels_; ++channel) {
-      RTC_DCHECK_EQ(0, buffer_[band][channel].size());
-
-      buffer_[band][channel].insert(buffer_[band][channel].begin(),
-                                    block.begin(band, channel),
-                                    block.end(band, channel));
+      size_t idx = band * num_channels_ + channel;
+      RTC_DCHECK_EQ(0, buffer_size_[idx]);
+      float* buf = &buffer_data_[idx * kBlockSize];
+      const float* block_src = block.View(band, channel).data();
+      std::memcpy(buf, block_src, kBlockSize * sizeof(float));
+      buffer_size_[idx] = kBlockSize;
     }
   }
 }
@@ -58,24 +58,24 @@ void BlockFramer::InsertBlockAndExtractSubFrame(
   for (size_t band = 0; band < num_bands_; ++band) {
     RTC_DCHECK_EQ(num_channels_, (*sub_frame)[0].size());
     for (size_t channel = 0; channel < num_channels_; ++channel) {
-      RTC_DCHECK_LE(kSubFrameLength,
-                    buffer_[band][channel].size() + kBlockSize);
-      RTC_DCHECK_GE(kBlockSize, buffer_[band][channel].size());
+      size_t idx = band * num_channels_ + channel;
+      RTC_DCHECK_LE(kSubFrameLength, buffer_size_[idx] + kBlockSize);
+      RTC_DCHECK_GE(kBlockSize, buffer_size_[idx]);
       RTC_DCHECK_EQ(kSubFrameLength, (*sub_frame)[band][channel].size());
 
-      const int samples_to_frame =
-          kSubFrameLength - buffer_[band][channel].size();
-      std::copy(buffer_[band][channel].begin(), buffer_[band][channel].end(),
-                (*sub_frame)[band][channel].begin());
-      std::copy(
-          block.begin(band, channel),
-          block.begin(band, channel) + samples_to_frame,
-          (*sub_frame)[band][channel].begin() + buffer_[band][channel].size());
-      buffer_[band][channel].clear();
-      buffer_[band][channel].insert(
-          buffer_[band][channel].begin(),
-          block.begin(band, channel) + samples_to_frame,
-          block.end(band, channel));
+      float* buf = &buffer_data_[idx * kBlockSize];
+      const size_t cur_sz = buffer_size_[idx];
+      const size_t samples_to_frame = kSubFrameLength - cur_sz;
+      float* sub_frame_dst = (*sub_frame)[band][channel].data();
+      const float* block_src = block.View(band, channel).data();
+
+      std::memcpy(sub_frame_dst, buf, cur_sz * sizeof(float));
+      std::memcpy(sub_frame_dst + cur_sz, block_src,
+                  samples_to_frame * sizeof(float));
+      const size_t rem = kBlockSize - samples_to_frame;
+      std::memcpy(buf, block_src + samples_to_frame,
+                  rem * sizeof(float));
+      buffer_size_[idx] = rem;
     }
   }
 }

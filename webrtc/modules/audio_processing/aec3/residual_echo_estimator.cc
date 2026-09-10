@@ -100,7 +100,7 @@ void NonLinearEstimate(
   const size_t num_capture_channels = R2.size();
   for (size_t ch = 0; ch < num_capture_channels; ++ch) {
     for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-      R2[ch][k] = X2[k] * echo_path_gain;
+      R2[ch][k] = (X2[k] > 0.f) ? FastFloatMul(X2[k], echo_path_gain) : 0.f;
     }
   }
 }
@@ -109,9 +109,11 @@ void NonLinearEstimate(
 void ApplyNoiseGate(const EchoCanceller3Config::EchoModel& config,
                     rtc::ArrayView<float, kFftLengthBy2Plus1> X2) {
   for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-    if (config.noise_gate_power > X2[k]) {
-      X2[k] = std::max(0.f, X2[k] - config.noise_gate_slope *
-                                        (config.noise_gate_power - X2[k]));
+    float x = X2[k];
+    if (config.noise_gate_power > x) {
+      float diff = config.noise_gate_power - x;
+      float reduction = FastFloatMul(config.noise_gate_slope, diff);
+      X2[k] = (x > reduction) ? (x - reduction) : 0.f;
     }
   }
 }
@@ -131,22 +133,39 @@ void EchoGeneratingPower(size_t num_render_channels,
   std::fill(X2.begin(), X2.end(), 0.f);
   if (num_render_channels == 1) {
     for (int k = idx_start; k != idx_stop; k = spectrum_buffer.IncIndex(k)) {
+      const float* buf = spectrum_buffer.buffer[k][0].data();
       for (size_t j = 0; j < kFftLengthBy2Plus1; ++j) {
-        X2[j] = std::max(X2[j], spectrum_buffer.buffer[k][/*channel=*/0][j]);
+        float p = buf[j];
+        union { float f; uint32_t u; } px, pp;
+        px.f = X2[j]; pp.f = p;
+        if (pp.u > px.u) X2[j] = p;
+      }
+    }
+  } else if (num_render_channels == 2) {
+    for (int k = idx_start; k != idx_stop; k = spectrum_buffer.IncIndex(k)) {
+      const float* ch0 = spectrum_buffer.buffer[k][0].data();
+      const float* ch1 = spectrum_buffer.buffer[k][1].data();
+      const uint32_t* u0 = reinterpret_cast<const uint32_t*>(ch0);
+      const uint32_t* u1 = reinterpret_cast<const uint32_t*>(ch1);
+      uint32_t* ux = reinterpret_cast<uint32_t*>(X2.data());
+      for (size_t j = 0; j < kFftLengthBy2Plus1; ++j) {
+        if ((u0[j] | u1[j]) == 0) continue;
+        float p = FastFloatAddPos(ch0[j], ch1[j]);
+        union { float f; uint32_t u; } pp;
+        pp.f = p;
+        if (pp.u > ux[j]) ux[j] = pp.u;
       }
     }
   } else {
     for (int k = idx_start; k != idx_stop; k = spectrum_buffer.IncIndex(k)) {
-      std::array<float, kFftLengthBy2Plus1> render_power;
-      render_power.fill(0.f);
-      for (size_t ch = 0; ch < num_render_channels; ++ch) {
-        const auto& channel_power = spectrum_buffer.buffer[k][ch];
-        for (size_t j = 0; j < kFftLengthBy2Plus1; ++j) {
-          render_power[j] += channel_power[j];
-        }
-      }
       for (size_t j = 0; j < kFftLengthBy2Plus1; ++j) {
-        X2[j] = std::max(X2[j], render_power[j]);
+        float p = 0.f;
+        for (size_t ch = 0; ch < num_render_channels; ++ch) {
+          p = FastFloatAddPos(p, spectrum_buffer.buffer[k][ch][j]);
+        }
+        union { float f; uint32_t u; } px, pp;
+        px.f = X2[j]; pp.f = p;
+        if (pp.u > px.u) X2[j] = p;
       }
     }
   }
@@ -231,12 +250,11 @@ void ResidualEchoEstimator::Estimate(
       // Subtract the stationary noise power to avoid stationary noise causing
       // excessive echo suppression.
       for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-        X2[k] -= config_.echo_model.stationary_gate_slope * X2_noise_floor_[k];
-        X2[k] = std::max(0.f, X2[k]);
+        float sub = FastFloatMul(config_.echo_model.stationary_gate_slope, X2_noise_floor_[k]);
+        X2[k] = (X2[k] > sub) ? (X2[k] - sub) : 0.f;
       }
 
       NonLinearEstimate(echo_path_gain, X2, R2);
-      NonLinearEstimate(echo_path_gain, X2, R2_unbounded);
     }
 
     if (config_.echo_model.model_reverb_in_nonlinear_mode &&
@@ -244,7 +262,9 @@ void ResidualEchoEstimator::Estimate(
       UpdateReverb(ReverbType::kNonLinear, aec_state, render_buffer,
                    dominant_nearend);
       AddReverb(R2);
-      AddReverb(R2_unbounded);
+    }
+    for (size_t ch = 0; ch < num_capture_channels; ++ch) {
+      std::copy(R2[ch].begin(), R2[ch].end(), R2_unbounded[ch].begin());
     }
   }
 
@@ -274,12 +294,19 @@ void ResidualEchoEstimator::UpdateRenderNoisePower(
       render_buffer.Spectrum(0);
   rtc::ArrayView<const float, kFftLengthBy2Plus1> render_power =
       X2[/*channel=*/0];
-  if (num_render_channels_ > 1) {
+  if (num_render_channels_ == 2) {
+    const float* ch0 = X2[0].data();
+    const float* ch1 = X2[1].data();
+    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      render_power_data[k] = FastFloatAddPos(ch0[k], ch1[k]);
+    }
+    render_power = render_power_data;
+  } else if (num_render_channels_ > 2) {
     render_power_data.fill(0.f);
     for (size_t ch = 0; ch < num_render_channels_; ++ch) {
       const auto& channel_power = X2[ch];
       for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-        render_power_data[k] += channel_power[k];
+        render_power_data[k] = FastFloatAddPos(render_power_data[k], channel_power[k]);
       }
     }
     render_power = render_power_data;
@@ -287,16 +314,22 @@ void ResidualEchoEstimator::UpdateRenderNoisePower(
 
   // Estimate the stationary noise power in a minimum statistics manner.
   for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+    union { float f; uint32_t u; } pr, pf;
+    pr.f = render_power[k];
+    pf.f = X2_noise_floor_[k];
     // Decrease rapidly.
-    if (render_power[k] < X2_noise_floor_[k]) {
+    if (pr.u < pf.u) {
       X2_noise_floor_[k] = render_power[k];
       X2_noise_floor_counter_[k] = 0;
     } else {
       // Increase in a delayed, leaky manner.
       if (X2_noise_floor_counter_[k] >=
           static_cast<int>(config_.echo_model.noise_floor_hold)) {
-        X2_noise_floor_[k] = std::max(X2_noise_floor_[k] * 1.1f,
-                                      config_.echo_model.min_noise_floor_power);
+        float inc = FastFloatMul(X2_noise_floor_[k], 1.1f);
+        union { float f; uint32_t u; } p_inc, p_min;
+        p_inc.f = inc;
+        p_min.f = config_.echo_model.min_noise_floor_power;
+        X2_noise_floor_[k] = (p_inc.u > p_min.u) ? inc : config_.echo_model.min_noise_floor_power;
       } else {
         ++X2_noise_floor_counter_[k];
       }
@@ -354,7 +387,9 @@ void ResidualEchoEstimator::AddReverb(
       echo_reverb_.reverb();
   for (size_t ch = 0; ch < num_capture_channels; ++ch) {
     for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-      R2[ch][k] += reverb_power[k];
+      if (reverb_power[k] > 0.f) {
+        R2[ch][k] = FastFloatAddPos(R2[ch][k], reverb_power[k]);
+      }
     }
   }
 }
@@ -373,7 +408,7 @@ float ResidualEchoEstimator::GetEchoPathGain(
                          ? early_reflections_general_gain_
                          : late_reflections_general_gain_;
   }
-  return gain_amplitude * gain_amplitude;
+  return FastFloatSqr(gain_amplitude);
 }
 
 }  // namespace webrtc

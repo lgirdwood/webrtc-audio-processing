@@ -37,6 +37,10 @@
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 
+extern "C" uint32_t sys_clock_cycle_get_32(void);
+static inline uint32_t k_cycle_get_32(void) { return sys_clock_cycle_get_32(); }
+extern "C" void printk(const char *fmt, ...);
+
 namespace webrtc {
 
 namespace {
@@ -48,7 +52,8 @@ namespace {
 // of channels, while at the same time not limiting the support for higher
 // numbers of channels by enforcing the capture channel data to be stored on the
 // stack using a fixed maximum value.
-constexpr size_t kMaxNumChannelsOnStack = 2;
+// On embedded DSPs with limited stack, use heap for all channels.
+constexpr size_t kMaxNumChannelsOnStack = 0;
 
 // Chooses the number of channels to store on the heap when that is required due
 // to the number of capture channels being larger than the pre-defined number
@@ -365,19 +370,37 @@ void EchoRemoverImpl::ProcessCapture(
     suppression_gain_.SetInitialState(false);
   }
 
+  uint32_t t_start = k_cycle_get_32();
   // Perform linear echo cancellation.
   subtractor_.Process(*render_buffer, *y, render_signal_analyzer_, aec_state_,
                       subtractor_output);
+  uint32_t t_sub = k_cycle_get_32();
 
+  uint32_t t_form = 0, t_wffty = 0, t_wffte = 0, t_spec = 0;
   // Compute spectra.
   for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
+    uint32_t ta = k_cycle_get_32();
     FormLinearFilterOutput(subtractor_output[ch], e[ch]);
+    uint32_t tb = k_cycle_get_32();
     WindowedPaddedFft(fft_, y->View(/*band=*/0, ch), y_old_[ch], &Y[ch]);
+    uint32_t tc = k_cycle_get_32();
     WindowedPaddedFft(fft_, e[ch], e_old_[ch], &E[ch]);
-    LinearEchoPower(E[ch], Y[ch], &S2_linear[ch]);
-    Y[ch].Spectrum(optimization_, Y2[ch]);
-    E[ch].Spectrum(optimization_, E2[ch]);
+    uint32_t td = k_cycle_get_32();
+    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      float yr = Y[ch].re[k], yi = Y[ch].im[k];
+      float er = E[ch].re[k], ei = E[ch].im[k];
+      float dr = yr - er, di = yi - ei;
+      S2_linear[ch][k] = FastMagSqr(dr, di);
+      Y2[ch][k] = FastMagSqr(yr, yi);
+      E2[ch][k] = FastMagSqr(er, ei);
+    }
+    uint32_t te = k_cycle_get_32();
+    t_form += (tb - ta);
+    t_wffty += (tc - tb);
+    t_wffte += (td - tc);
+    t_spec += (te - td);
   }
+  uint32_t t_fft = k_cycle_get_32();
 
   // Optionally return the linear filter output.
   if (linear_output) {
@@ -393,6 +416,7 @@ void EchoRemoverImpl::ProcessCapture(
   aec_state_.Update(external_delay, subtractor_.FilterFrequencyResponses(),
                     subtractor_.FilterImpulseResponses(), *render_buffer, E2,
                     Y2, subtractor_output);
+  uint32_t t_state = k_cycle_get_32();
 
   // Choose the linear output.
   const auto& Y_fft = aec_state_.UseLinearFilterOutput() ? E : Y;
@@ -404,15 +428,18 @@ void EchoRemoverImpl::ProcessCapture(
   // Estimate the comfort noise.
   cng_.Compute(aec_state_.SaturatedCapture(), Y2, comfort_noise,
                high_band_comfort_noise);
+  uint32_t t_cng = k_cycle_get_32();
 
   // Only do the below processing if the output of the audio processing module
   // is used.
   std::array<float, kFftLengthBy2Plus1> G;
+  uint32_t t_ree = t_cng, t_gain = t_cng, t_supp_start = t_cng, t_supp = t_cng;
   if (capture_output_used_) {
     // Estimate the residual echo power.
     residual_echo_estimator_.Estimate(aec_state_, *render_buffer, S2_linear, Y2,
                                       suppression_gain_.IsDominantNearend(), R2,
                                       R2_unbounded);
+    t_ree = k_cycle_get_32();
 
     // Suppressor nearend estimate.
     if (aec_state_.UsableLinearEstimate()) {
@@ -438,12 +465,50 @@ void EchoRemoverImpl::ProcessCapture(
     suppression_gain_.GetGain(nearend_spectrum, echo_spectrum, R2, R2_unbounded,
                               cng_.NoiseSpectrum(), render_signal_analyzer_,
                               aec_state_, x, clock_drift, &high_bands_gain, &G);
+    t_gain = k_cycle_get_32();
+
+    bool has_suppression = false;
+    for (size_t i = 0; i < kFftLengthBy2Plus1; ++i) {
+      if (G[i] < 0.99f) {
+        has_suppression = true;
+        break;
+      }
+    }
+    if (has_suppression) {
+      cng_.GenerateComfortNoise(comfort_noise, high_band_comfort_noise);
+    }
+
+    t_supp_start = k_cycle_get_32();
 
     suppression_filter_.ApplyGain(comfort_noise, high_band_comfort_noise, G,
                                   high_bands_gain, Y_fft, y);
+    t_supp = k_cycle_get_32();
 
   } else {
     G.fill(0.f);
+  }
+
+  static uint32_t s_sub = 0, s_fft = 0, s_state = 0, s_cng = 0, s_ree = 0, s_gain = 0, s_supp = 0, s_cnt = 0;
+  s_sub += (t_sub - t_start);
+  s_fft += (t_fft - t_sub);
+  s_state += (t_state - t_fft);
+  s_cng += (t_cng - t_state) + (t_supp_start - t_gain);
+  s_ree += (t_ree - t_cng);
+  s_gain += (t_gain - t_ree);
+  s_supp += (t_supp - t_supp_start);
+  if (++s_cnt % 50 == 0) {
+    uint32_t u_sub = s_sub / (s_cnt * 1000);
+    uint32_t u_fft = s_fft / (s_cnt * 1000);
+    uint32_t u_state = s_state / (s_cnt * 1000);
+    uint32_t u_cng = s_cng / (s_cnt * 1000);
+    uint32_t u_ree = s_ree / (s_cnt * 1000);
+    uint32_t u_gain = s_gain / (s_cnt * 1000);
+    uint32_t u_supp = s_supp / (s_cnt * 1000);
+    uint32_t u_tot = u_sub + u_fft + u_state + u_cng + u_ree + u_gain + u_supp;
+#if CONFIG_WEBRTC_AEC_PERF_TELEMETRY
+    printk("[AEC3_P1] sub=%u fft=%u st=%u cng=%u\n", u_sub, u_fft, u_state, u_cng);
+    printk("[AEC3_P2] ree=%u gn=%u sp=%u tot=%u\n", u_ree, u_gain, u_supp, u_tot);
+#endif
   }
 
   // Update the metrics.

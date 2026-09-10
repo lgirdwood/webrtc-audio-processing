@@ -30,8 +30,9 @@ void ErlComputer(const std::vector<std::array<float, kFftLengthBy2Plus1>>& H2,
                  rtc::ArrayView<float> erl) {
   std::fill(erl.begin(), erl.end(), 0.f);
   for (auto& H2_j : H2) {
-    std::transform(H2_j.begin(), H2_j.end(), erl.begin(), erl.begin(),
-                   std::plus<float>());
+    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      erl[k] = FastFloatAddPos(erl[k], H2_j[k]);
+    }
   }
 }
 

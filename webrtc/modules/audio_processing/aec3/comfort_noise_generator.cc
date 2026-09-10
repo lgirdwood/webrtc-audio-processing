@@ -48,55 +48,6 @@ constexpr float kSqrt2Sin[32] = {
     -1.3870398f, -1.3065630f, -1.1758756f, -1.0000000f, -0.7856950f,
     -0.5411961f, -0.2758994f};
 
-void GenerateComfortNoise(Aec3Optimization optimization,
-                          const std::array<float, kFftLengthBy2Plus1>& N2,
-                          uint32_t* seed,
-                          FftData* lower_band_noise,
-                          FftData* upper_band_noise) {
-  FftData* N_low = lower_band_noise;
-  FftData* N_high = upper_band_noise;
-
-  // Compute square root spectrum.
-  std::array<float, kFftLengthBy2Plus1> N;
-  std::copy(N2.begin(), N2.end(), N.begin());
-  aec3::VectorMath(optimization).Sqrt(N);
-
-  // Compute the noise level for the upper bands.
-  constexpr float kOneByNumBands = 1.f / (kFftLengthBy2Plus1 / 2 + 1);
-  constexpr int kFftLengthBy2Plus1By2 = kFftLengthBy2Plus1 / 2;
-  const float high_band_noise_level =
-      std::accumulate(N.begin() + kFftLengthBy2Plus1By2, N.end(), 0.f) *
-      kOneByNumBands;
-
-  // The analysis and synthesis windowing cause loss of power when
-  // cross-fading the noise where frames are completely uncorrelated
-  // (generated with random phase), hence the factor sqrt(2).
-  // This is not the case for the speech signal where the input is overlapping
-  // (strong correlation).
-  N_low->re[0] = N_low->re[kFftLengthBy2] = N_high->re[0] =
-      N_high->re[kFftLengthBy2] = 0.f;
-  for (size_t k = 1; k < kFftLengthBy2; k++) {
-    constexpr int kIndexMask = 32 - 1;
-    // Generate a random 31-bit integer.
-    seed[0] = (seed[0] * 69069 + 1) & (0x80000000 - 1);
-    // Convert to a 5-bit index.
-    int i = seed[0] >> 26;
-
-    // y = sqrt(2) * sin(a)
-    const float x = kSqrt2Sin[i];
-    // x = sqrt(2) * cos(a) = sqrt(2) * sin(a + pi/2)
-    const float y = kSqrt2Sin[(i + 8) & kIndexMask];
-
-    // Form low-frequency noise via spectral shaping.
-    N_low->re[k] = N[k] * x;
-    N_low->im[k] = N[k] * y;
-
-    // Form the high-frequency noise via simple levelling.
-    N_high->re[k] = high_band_noise_level * x;
-    N_high->im[k] = high_band_noise_level * y;
-  }
-}
-
 }  // namespace
 
 ComfortNoiseGenerator::ComfortNoiseGenerator(const EchoCanceller3Config& config,
@@ -129,57 +80,99 @@ void ComfortNoiseGenerator::Compute(
   const auto& Y2 = capture_spectrum;
 
   if (!saturated_capture) {
-    // Smooth Y2.
+    bool update_n2 = (N2_counter_ > 50);
+    bool has_initial = (N2_initial_ != nullptr);
+    if (has_initial && ++N2_counter_ == 1000) {
+      N2_initial_.reset();
+      has_initial = false;
+    }
+
     for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
-      std::transform(Y2_smoothed_[ch].begin(), Y2_smoothed_[ch].end(),
-                     Y2[ch].begin(), Y2_smoothed_[ch].begin(),
-                     [](float a, float b) { return a + 0.1f * (b - a); });
-    }
+      float* y2_sm = Y2_smoothed_[ch].data();
+      const float* y2 = Y2[ch].data();
+      float* n2 = N2_[ch].data();
+      float* n2_init = has_initial ? (*N2_initial_)[ch].data() : nullptr;
 
-    if (N2_counter_ > 50) {
-      // Update N2 from Y2_smoothed.
-      for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
-        std::transform(N2_[ch].begin(), N2_[ch].end(), Y2_smoothed_[ch].begin(),
-                       N2_[ch].begin(), [](float a, float b) {
-                         return b < a ? (0.9f * b + 0.1f * a) * 1.0002f
-                                      : a * 1.0002f;
-                       });
-      }
-    }
+      constexpr float kSmFactor = 0.90018f;
+      constexpr float kN2Factor = 0.10002f;
+      for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+        // 1. Smooth Y2: 0.9f * sm + 0.1f * y_val
+        float y_val = y2[k];
+        float sm = y2_sm[k];
+        sm = FastFloatAddPos(FastFloatMul(0.9f, sm), FastFloatMul(0.1f, y_val));
+        y2_sm[k] = sm;
 
-    if (N2_initial_) {
-      if (++N2_counter_ == 1000) {
-        N2_initial_.reset();
-      } else {
-        // Compute the N2_initial from N2.
-        for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
-          std::transform(N2_[ch].begin(), N2_[ch].end(),
-                         (*N2_initial_)[ch].begin(), (*N2_initial_)[ch].begin(),
-                         [](float a, float b) {
-                           return a > b ? b + 0.001f * (a - b) : a;
-                         });
+        // 2. Update N2 from Y2_smoothed
+        float cur_n2 = n2[k];
+        if (update_n2) {
+          cur_n2 = (sm < cur_n2) ? FastFloatAddPos(FastFloatMul(kSmFactor, sm), FastFloatMul(kN2Factor, cur_n2))
+                                 : FastFloatMul(cur_n2, 1.0002f);
         }
-      }
-    }
+        if (cur_n2 < noise_floor_) {
+          cur_n2 = noise_floor_;
+        }
+        n2[k] = cur_n2;
 
-    for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
-      for (auto& n : N2_[ch]) {
-        n = std::max(n, noise_floor_);
-      }
-      if (N2_initial_) {
-        for (auto& n : (*N2_initial_)[ch]) {
-          n = std::max(n, noise_floor_);
+        // 3. Update N2_initial from N2 if active
+        if (n2_init) {
+          float cur_init = n2_init[k];
+          if (cur_n2 > cur_init) {
+            cur_init = FastFloatAddPos(FastFloatMul(0.999f, cur_init), FastFloatMul(0.001f, cur_n2));
+          } else {
+            cur_init = cur_n2;
+          }
+          if (cur_init < noise_floor_) {
+            cur_init = noise_floor_;
+          }
+          n2_init[k] = cur_init;
         }
       }
     }
   }
+}
 
-  // Choose N2 estimate to use.
+void ComfortNoiseGenerator::GenerateComfortNoise(
+    rtc::ArrayView<FftData> lower_band_noise,
+    rtc::ArrayView<FftData> upper_band_noise) {
   const auto& N2 = N2_initial_ ? (*N2_initial_) : N2_;
 
   for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
-    GenerateComfortNoise(optimization_, N2[ch], &seed_, &lower_band_noise[ch],
-                         &upper_band_noise[ch]);
+    FftData* N_low = &lower_band_noise[ch];
+    const float* n2 = N2[ch].data();
+
+    // Compute square root spectrum using FastFloatSqrt.
+    std::array<float, kFftLengthBy2Plus1> N;
+    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      N[k] = FastFloatSqrt(n2[k]);
+    }
+
+#if defined(WEBRTC_ARCH_X86_FAMILY) || defined(WEBRTC_HAS_NEON)
+    FftData* N_high = &upper_band_noise[ch];
+    constexpr float kOneByNumBands = 1.f / (kFftLengthBy2Plus1 / 2 + 1);
+    constexpr int kFftLengthBy2Plus1By2 = kFftLengthBy2Plus1 / 2;
+    const float high_band_noise_level =
+        std::accumulate(N.begin() + kFftLengthBy2Plus1By2, N.end(), 0.f) *
+        kOneByNumBands;
+    N_high->re[0] = N_high->re[kFftLengthBy2] = 0.f;
+#endif
+
+    N_low->re[0] = N_low->re[kFftLengthBy2] = 0.f;
+    for (size_t k = 1; k < kFftLengthBy2; k++) {
+      constexpr int kIndexMask = 32 - 1;
+      seed_ = (seed_ * 69069 + 1) & (0x80000000 - 1);
+      int i = seed_ >> 26;
+
+      const float x = kSqrt2Sin[i];
+      const float y = kSqrt2Sin[(i + 8) & kIndexMask];
+
+      N_low->re[k] = FastFloatMul(N[k], x);
+      N_low->im[k] = FastFloatMul(N[k], y);
+
+#if defined(WEBRTC_ARCH_X86_FAMILY) || defined(WEBRTC_HAS_NEON)
+      N_high->re[k] = high_band_noise_level * x;
+      N_high->im[k] = high_band_noise_level * y;
+#endif
+    }
   }
 }
 

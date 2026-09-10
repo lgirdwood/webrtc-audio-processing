@@ -12,6 +12,8 @@
 
 #include <numeric>
 
+#include "modules/audio_processing/aec3/aec3_common.h"
+
 namespace webrtc {
 DominantNearendDetector::DominantNearendDetector(
     const EchoCanceller3Config::Suppressor::DominantNearendDetection& config,
@@ -38,7 +40,11 @@ void DominantNearendDetector::Update(
 
   auto low_frequency_energy = [](rtc::ArrayView<const float> spectrum) {
     RTC_DCHECK_LE(16, spectrum.size());
-    return std::accumulate(spectrum.begin() + 1, spectrum.begin() + 16, 0.f);
+    float s = 0.f;
+    for (size_t i = 1; i < 16; ++i) {
+      s = FastFloatAddPos(s, spectrum[i]);
+    }
+    return s;
   };
 
   for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
