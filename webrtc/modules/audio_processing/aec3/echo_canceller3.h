@@ -28,7 +28,7 @@
 #include "modules/audio_processing/aec3/config_selector.h"
 #include "modules/audio_processing/aec3/frame_blocker.h"
 #include "modules/audio_processing/aec3/multi_channel_content_detector.h"
-#include "modules/audio_processing/audio_buffer.h"
+#include "modules/audio_processing/aec3_buffer/audio_buffer.h"
 #include "modules/audio_processing/logging/apm_data_dumper.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/race_checker.h"
