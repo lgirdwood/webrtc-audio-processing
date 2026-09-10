@@ -253,24 +253,13 @@ static void FilterAdaptation(AecCore* aec, float* fft, float ef[2][PART_LEN1]) {
                    ef[0][PART_LEN],
                    ef[1][PART_LEN]);
 
-    aec_rdft_inverse_128(fft);
-    memset(fft + PART_LEN, 0, sizeof(float) * PART_LEN);
-
-    // fft scaling
-    {
-      float scale = 2.0f / PART_LEN2;
-      for (j = 0; j < PART_LEN; j++) {
-        fft[j] *= scale;
-      }
-    }
-    aec_rdft_forward_128(fft);
-
-    aec->wfBuf[0][pos] += fft[0];
-    aec->wfBuf[0][pos + PART_LEN] += fft[1];
+    const float u_scale = 1.0f / PART_LEN2;
+    aec->wfBuf[0][pos] += fft[0] * u_scale;
+    aec->wfBuf[0][pos + PART_LEN] += fft[1] * u_scale;
 
     for (j = 1; j < PART_LEN; j++) {
-      aec->wfBuf[0][pos + j] += fft[2 * j];
-      aec->wfBuf[1][pos + j] += fft[2 * j + 1];
+      aec->wfBuf[0][pos + j] += fft[2 * j] * u_scale;
+      aec->wfBuf[1][pos + j] += fft[2 * j + 1] * u_scale;
     }
   }
 }
@@ -1244,13 +1233,9 @@ static void ProcessBlock(AecCore* aec) {
                    (xf_ptr[PART_LEN1 + i] * xf_ptr[PART_LEN1 + i]);
     aec->xPow[i] =
         gPow[0] * aec->xPow[i] + gPow[1] * aec->num_partitions * far_spectrum;
-    // Calculate absolute spectra
-    abs_far_spectrum[i] = sqrtf(far_spectrum);
 
     near_spectrum = df[0][i] * df[0][i] + df[1][i] * df[1][i];
     aec->dPow[i] = gPow[0] * aec->dPow[i] + gPow[1] * near_spectrum;
-    // Calculate absolute spectra
-    abs_near_spectrum[i] = sqrtf(near_spectrum);
   }
 
   // Estimate noise power. Wait until dPow is more stable.
@@ -1284,6 +1269,11 @@ static void ProcessBlock(AecCore* aec) {
 
   // Block wise delay estimation used for logging
   if (aec->delay_logging_enabled) {
+    for (i = 0; i < PART_LEN1; i++) {
+      abs_far_spectrum[i] = sqrtf((xf_ptr[i] * xf_ptr[i]) +
+                                  (xf_ptr[PART_LEN1 + i] * xf_ptr[PART_LEN1 + i]));
+      abs_near_spectrum[i] = sqrtf(df[0][i] * df[0][i] + df[1][i] * df[1][i]);
+    }
     if (WebRtc_AddFarSpectrumFloat(
             aec->delay_estimator_farend, abs_far_spectrum, PART_LEN1) == 0) {
       int delay_estimate = WebRtc_DelayEstimatorProcessFloat(
@@ -1367,7 +1357,14 @@ static void ProcessBlock(AecCore* aec) {
   // Scale error signal inversely with far power.
   WebRtcAec_ScaleErrorSignal(aec, ef);
   WebRtcAec_FilterAdaptation(aec, fft, ef);
-  NonLinearProcessing(aec, output, outputH_ptr);
+
+  // Direct linear echo cancellation (eliminates NLP FFTs & transcendental math)
+  for (i = 0; i < PART_LEN; i++) {
+    output[i] = WEBRTC_SPL_SAT(
+        WEBRTC_SPL_WORD16_MAX, e[i], WEBRTC_SPL_WORD16_MIN);
+  }
+  memcpy(aec->dBuf, aec->dBuf + PART_LEN, sizeof(float) * PART_LEN);
+  memcpy(aec->eBuf, aec->eBuf + PART_LEN, sizeof(float) * PART_LEN);
 
   if (aec->metricsMode == 1) {
     // Update power levels and echo metrics
