@@ -23,17 +23,16 @@ static const int32_t kProbabilityOffset = 1024;  // 2 in Q9.
 static const int32_t kProbabilityLowerLimit = 8704;  // 17 in Q9.
 static const int32_t kProbabilityMinSpread = 2816;  // 5.5 in Q9.
 
-// Robust validation settings
-static const float kHistogramMax = 3000.f;
-static const float kLastHistogramMax = 250.f;
-static const float kMinHistogramThreshold = 1.5f;
+// Robust validation settings (in Q14 fixed-point)
+static const int32_t kHistogramMax = 3000 * 16384;
+static const int32_t kLastHistogramMax = 250 * 16384;
+static const int32_t kMinHistogramThreshold = (int32_t)(1.5f * 16384);
 static const int kMinRequiredHits = 10;
 static const int kMaxHitsWhenPossiblyNonCausal = 10;
 static const int kMaxHitsWhenPossiblyCausal = 1000;
-static const float kQ14Scaling = 1.f / (1 << 14);  // Scaling by 2^14 to get Q0.
-static const float kFractionSlope = 0.05f;
-static const float kMinFractionWhenPossiblyCausal = 0.5f;
-static const float kMinFractionWhenPossiblyNonCausal = 0.25f;
+static const int32_t kFractionSlope = (int32_t)(0.05f * 16384);
+static const int32_t kMinFractionWhenPossiblyCausal = 16384 / 2;
+static const int32_t kMinFractionWhenPossiblyNonCausal = 16384 / 4;
 
 // Counts and returns number of bits of a 32-bit word.
 static int BitCount(uint32_t u32) {
@@ -92,8 +91,8 @@ static void UpdateRobustValidationStatistics(BinaryDelayEstimator* self,
                                              int candidate_delay,
                                              int32_t valley_depth_q14,
                                              int32_t valley_level_q14) {
-  const float valley_depth = valley_depth_q14 * kQ14Scaling;
-  float decrease_in_last_set = valley_depth;
+  const int32_t valley_depth = valley_depth_q14;
+  int32_t decrease_in_last_set = valley_depth;
   const int max_hits_for_slow_change = (candidate_delay < self->last_delay) ?
       kMaxHitsWhenPossiblyNonCausal : kMaxHitsWhenPossiblyCausal;
   int i = 0;
@@ -125,8 +124,8 @@ static void UpdateRobustValidationStatistics(BinaryDelayEstimator* self,
   //    |candidate_delay| is a "potential" candidate and we start decreasing
   //    these histogram bins more rapidly with |valley_depth|.
   if (self->candidate_hits < max_hits_for_slow_change) {
-    decrease_in_last_set = (self->mean_bit_counts[self->compare_delay] -
-        valley_level_q14) * kQ14Scaling;
+    decrease_in_last_set = self->mean_bit_counts[self->compare_delay] -
+        valley_level_q14;
   }
   // 4. All other bins are decreased with |valley_depth|.
   // TODO(bjornv): Investigate how to make this loop more efficient.  Split up
@@ -169,8 +168,8 @@ static void UpdateRobustValidationStatistics(BinaryDelayEstimator* self,
 //                          0 - Otherwise.
 static int HistogramBasedValidation(const BinaryDelayEstimator* self,
                                     int candidate_delay) {
-  float fraction = 1.f;
-  float histogram_threshold = self->histogram[self->compare_delay];
+  int32_t fraction = 16384;
+  int32_t histogram_threshold = self->histogram[self->compare_delay];
   const int delay_difference = candidate_delay - self->last_delay;
   int is_histogram_valid = 0;
 
@@ -193,15 +192,15 @@ static int HistogramBasedValidation(const BinaryDelayEstimator* self,
   // TODO(bjornv): How much can we gain by turning the fraction calculation
   // into tables?
   if (delay_difference > self->allowed_offset) {
-    fraction = 1.f - kFractionSlope * (delay_difference - self->allowed_offset);
+    fraction = 16384 - kFractionSlope * (delay_difference - self->allowed_offset);
     fraction = (fraction > kMinFractionWhenPossiblyCausal ? fraction :
         kMinFractionWhenPossiblyCausal);
   } else if (delay_difference < 0) {
     fraction = kMinFractionWhenPossiblyNonCausal -
         kFractionSlope * delay_difference;
-    fraction = (fraction > 1.f ? 1.f : fraction);
+    fraction = (fraction > 16384 ? 16384 : fraction);
   }
-  histogram_threshold *= fraction;
+  histogram_threshold = (int32_t)(((int64_t)histogram_threshold * fraction) >> 14);
   histogram_threshold = (histogram_threshold > kMinHistogramThreshold ?
       histogram_threshold : kMinHistogramThreshold);
 
@@ -651,22 +650,8 @@ int WebRtc_binary_last_delay(BinaryDelayEstimator* self) {
 }
 
 float WebRtc_binary_last_delay_quality(BinaryDelayEstimator* self) {
-  float quality = 0;
   assert(self != NULL);
-
-  if (self->robust_validation_enabled) {
-    // Simply a linear function of the histogram height at delay estimate.
-    quality = self->histogram[self->compare_delay] / kHistogramMax;
-  } else {
-    // Note that |last_delay_probability| states how deep the minimum of the
-    // cost function is, so it is rather an error probability.
-    quality = (float) (kMaxBitCountsQ9 - self->last_delay_probability) /
-        kMaxBitCountsQ9;
-    if (quality < 0) {
-      quality = 0;
-    }
-  }
-  return quality;
+  return 0.0f;
 }
 
 void WebRtc_MeanEstimatorFix(int32_t new_value,

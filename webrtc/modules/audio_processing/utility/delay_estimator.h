@@ -51,8 +51,8 @@ typedef struct {
   int last_candidate_delay;
   int compare_delay;
   int candidate_hits;
-  float* histogram;
-  float last_delay_histogram;
+  int32_t* histogram;
+  int32_t last_delay_histogram;
 
   // For dynamically changing the lookahead when using SoftReset...().
   int lookahead;

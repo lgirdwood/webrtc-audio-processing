@@ -81,7 +81,9 @@ static int WebRtcAecm_EstBufDelay(AecMobile* aecmInst, short msInSndCardBuf);
 static int WebRtcAecm_DelayComp(AecMobile* aecmInst);
 
 void* WebRtcAecm_Create() {
-    AecMobile* aecm = malloc(sizeof(AecMobile));
+    AecMobile* aecm = calloc(1, sizeof(AecMobile));
+    if (!aecm)
+        return NULL;
 
     WebRtcSpl_Init();
 
@@ -332,7 +334,7 @@ int32_t WebRtcAecm_Process(void *aecmInst, const int16_t *nearendNoisy,
             }
 
             if (abs(aecm->firstVal - aecm->msInSndCardBuf)
-                    < WEBRTC_SPL_MAX(0.2 * aecm->msInSndCardBuf, kSampMsNb))
+                    < WEBRTC_SPL_MAX(aecm->msInSndCardBuf / 5, kSampMsNb))
             {
                 aecm->sum += aecm->msInSndCardBuf;
                 aecm->counter++;
