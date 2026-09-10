@@ -18,7 +18,10 @@
 //   http://msdn.microsoft.com/en-us/library/b0084kay.aspx
 //   http://www.agner.org/optimize/calling_conventions.pdf
 //   or with gcc, run: "echo | gcc -E -dM -"
-#if defined(_M_X64) || defined(__x86_64__)
+#if defined(WEBRTC_ARCH_GENERIC) || defined(__XTENSA__)
+#define WEBRTC_ARCH_32_BITS
+#define WEBRTC_ARCH_LITTLE_ENDIAN
+#elif defined(_M_X64) || defined(__x86_64__)
 #define WEBRTC_ARCH_X86_FAMILY
 #define WEBRTC_ARCH_X86_64
 #define WEBRTC_ARCH_64_BITS
