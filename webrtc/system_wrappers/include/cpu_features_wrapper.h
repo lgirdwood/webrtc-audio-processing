@@ -67,7 +67,7 @@ inline int GetCPUInfoNoASM(CPUFeature feature) {
 }
 
 inline uint64_t GetCPUFeaturesARM(void) {
-  return WebRtc_GetCPUFeaturesARM ? WebRtc_GetCPUFeaturesARM() : 0;
+  return 0;
 }
 }  // namespace webrtc
 #endif
