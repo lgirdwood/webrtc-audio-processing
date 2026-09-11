@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <numeric>
 
+#include "modules/audio_processing/aec3/aec3_common.h"
 #include "rtc_base/checks.h"
 
 namespace webrtc {
@@ -105,7 +106,7 @@ void ErlEstimator::Update(
   // Update the estimates in a maximum statistics manner.
   for (size_t k = 1; k < kFftLengthBy2; ++k) {
     if (X2[k] > kX2Min) {
-      const float new_erl = Y2[k] / X2[k];
+      const float new_erl = FastFloatDiv(Y2[k], X2[k]);
       if (new_erl < erl_[k]) {
         hold_counters_[k - 1] = 1000;
         erl_[k] += 0.1f * (new_erl - erl_[k]);
@@ -125,11 +126,17 @@ void ErlEstimator::Update(
   erl_[kFftLengthBy2] = erl_[kFftLengthBy2 - 1];
 
   // Compute ERL over all frequency bins.
-  const float X2_sum = std::accumulate(X2.begin(), X2.end(), 0.0f);
+  float X2_sum = 0.0f;
+  for (float x : X2) {
+    X2_sum = FastFloatAddPos(X2_sum, x);
+  }
 
   if (X2_sum > kX2Min * X2.size()) {
-    const float Y2_sum = std::accumulate(Y2.begin(), Y2.end(), 0.0f);
-    const float new_erl = Y2_sum / X2_sum;
+    float Y2_sum = 0.0f;
+    for (float y : Y2) {
+      Y2_sum = FastFloatAddPos(Y2_sum, y);
+    }
+    const float new_erl = FastFloatDiv(Y2_sum, X2_sum);
     if (new_erl < erl_time_domain_) {
       hold_counter_time_domain_ = 1000;
       erl_time_domain_ += 0.1f * (new_erl - erl_time_domain_);

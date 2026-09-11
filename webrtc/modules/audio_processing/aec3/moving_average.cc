@@ -54,7 +54,10 @@ void MovingAverage::Average(rtc::ArrayView<const float> input,
       float v = in[k];
       float s = FastFloatAddPos(FastFloatAddPos(FastFloatAddPos(v, m0[k]), m1[k]), m2[k]);
       cur_mem[k] = v;
-      out[k] = FastFloatMul(s, scaling_);
+      union { float f; uint32_t u; } pun;
+      pun.f = s;
+      if (pun.u >= (2U << 23)) pun.u -= (2U << 23); else pun.f = 0.0f;
+      out[k] = pun.f;
     }
   } else {
     for (size_t k = 0; k < num_elem_; ++k) {

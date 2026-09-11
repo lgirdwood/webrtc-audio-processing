@@ -35,6 +35,19 @@ void PredictionError(const Aec3Fft& fft,
                      rtc::ArrayView<const float> y,
                      std::array<float, kBlockSize>* e,
                      std::array<float, kBlockSize>* s) {
+  bool is_s_zero = true;
+  for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+    if (S.re[k] != 0.f || S.im[k] != 0.f) {
+      is_s_zero = false;
+      break;
+    }
+  }
+  if (is_s_zero) {
+    if (s) s->fill(0.f);
+    std::copy(y.begin(), y.end(), e->begin());
+    return;
+  }
+
   std::array<float, kFftLength> tmp;
   fft.Ifft(S, &tmp);
   constexpr float kScale = 1.0f / kFftLengthBy2;
@@ -208,6 +221,15 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
                                &X2_coarse);
   }
 
+  // Detect whether render has active excitation across the filter length.
+  bool render_active = false;
+  for (float x : X2_refined) {
+    if (x > 1e-12f) {
+      render_active = true;
+      break;
+    }
+  }
+
   // Process all capture channels
   for (size_t ch = 0; ch < num_capture_channels_; ++ch) {
     SubtractorOutput& output = outputs[ch];
@@ -216,6 +238,39 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
     FftData E_coarse;
     std::array<float, kBlockSize>& e_refined = output.e_refined;
     std::array<float, kBlockSize>& e_coarse = output.e_coarse;
+
+    if (!render_active) {
+      output.s_refined.fill(0.f);
+      std::copy(y.begin(), y.end(), e_refined.begin());
+      output.s_coarse.fill(0.f);
+      std::copy(y.begin(), y.end(), e_coarse.begin());
+
+      float y2_sum = 0.f;
+      for (size_t i = 0; i < kBlockSize; ++i) {
+        y2_sum = FastFloatAddPos(y2_sum, FastFloatSqr(y[i]));
+      }
+      output.y2 = y2_sum;
+      output.e2_refined = y2_sum;
+      output.s2_refined = 0.f;
+      output.e2_coarse = y2_sum;
+      output.s2_coarse = 0.f;
+      output.s_refined_max_abs = 0.f;
+      output.s_coarse_max_abs = 0.f;
+
+      E_refined.re.fill(0.f);
+      E_refined.im.fill(0.f);
+      output.E2_refined.fill(0.f);
+      output.E2_coarse.fill(0.f);
+
+      filter_misadjustment_estimators_[ch].Update(output);
+      poor_coarse_filter_counters_[ch] = 0;
+      coarse_filter_reset_hangover_[ch] =
+          std::max(coarse_filter_reset_hangover_[ch] - 1, 0);
+
+      std::for_each(e_refined.begin(), e_refined.end(),
+                    [](float& a) { a = rtc::SafeClamp(a, -32768.f, 32767.f); });
+      continue;
+    }
 
     FftData S;
     FftData& G = S;
@@ -249,18 +304,17 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
       refined_filters_adjusted = true;
     }
 
-    // Compute the FFts of the refined and coarse filter outputs.
-    fft_.ZeroPaddedFft(e_refined, Aec3Fft::Window::kHanning, &E_refined);
-    if (config_.filter.enable_coarse_filter_output_usage) {
-      fft_.ZeroPaddedFft(e_coarse, Aec3Fft::Window::kHanning, &E_coarse);
-      E_coarse.Spectrum(optimization_, output.E2_coarse);
+    // Compute the FFT of the refined filter output only when render is excited.
+    const bool poor_render = render_signal_analyzer.PoorSignalExcitation();
+    if (!poor_render) {
+      fft_.ZeroPaddedFft(e_refined, Aec3Fft::Window::kHanning, &E_refined);
+      E_refined.Spectrum(optimization_, output.E2_refined);
     } else {
-      E_coarse = E_refined;
-      output.E2_coarse = output.E2_refined;
+      E_refined.re.fill(0.f);
+      E_refined.im.fill(0.f);
+      output.E2_refined.fill(0.f);
     }
-
-    // Compute spectra for future use.
-    E_refined.Spectrum(optimization_, output.E2_refined);
+    output.E2_coarse = output.E2_refined;
 
     // Update the refined filter.
     if (!refined_filters_adjusted) {
@@ -281,10 +335,19 @@ void Subtractor::Process(const RenderBuffer& render_buffer,
       G.re.fill(0.f);
       G.im.fill(0.f);
     }
-    refined_filters_[ch]->Adapt(render_buffer, G,
-                                &refined_impulse_responses_[ch]);
-    refined_filters_[ch]->ComputeFrequencyResponse(
-        &refined_frequency_responses_[ch]);
+    bool g_is_zero = true;
+    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      if (G.re[k] != 0.f || G.im[k] != 0.f) {
+        g_is_zero = false;
+        break;
+      }
+    }
+    if (!g_is_zero) {
+      refined_filters_[ch]->Adapt(render_buffer, G,
+                                  &refined_impulse_responses_[ch]);
+      refined_filters_[ch]->ComputeFrequencyResponse(
+          &refined_frequency_responses_[ch]);
+    }
 
     if (ch == 0) {
       data_dumper_->DumpRaw("aec3_subtractor_G_refined", G.re);

@@ -34,17 +34,20 @@ float AverageDecayWithinFilter(
   constexpr size_t kSkipBins = 1;
   RTC_CHECK_EQ(freq_resp_direct_path.size(), freq_resp_tail.size());
 
-  float direct_path_energy =
-      std::accumulate(freq_resp_direct_path.begin() + kSkipBins,
-                      freq_resp_direct_path.end(), 0.f);
+  float direct_path_energy = 0.f;
+  for (size_t i = kSkipBins; i < freq_resp_direct_path.size(); ++i) {
+    direct_path_energy = FastFloatAddPos(direct_path_energy, freq_resp_direct_path[i]);
+  }
 
   if (direct_path_energy == 0.f) {
     return 0.f;
   }
 
-  float tail_energy = std::accumulate(freq_resp_tail.begin() + kSkipBins,
-                                      freq_resp_tail.end(), 0.f);
-  return tail_energy / direct_path_energy;
+  float tail_energy = 0.f;
+  for (size_t i = kSkipBins; i < freq_resp_tail.size(); ++i) {
+    tail_energy = FastFloatAddPos(tail_energy, freq_resp_tail[i]);
+  }
+  return FastFloatDiv(tail_energy, direct_path_energy);
 }
 
 }  // namespace

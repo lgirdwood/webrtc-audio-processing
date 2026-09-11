@@ -83,6 +83,23 @@ void FilterAnalyzer::Update(
   RTC_DCHECK_EQ(filters_time_domain.size(), h_highpass_.size());
 
   ++blocks_since_reset_;
+
+  bool all_zero = true;
+  for (size_t ch = 0; ch < filters_time_domain.size(); ++ch) {
+    if (!filters_time_domain[ch].empty() &&
+        (filters_time_domain[ch][0] != 0.f ||
+         filters_time_domain[ch][filters_time_domain[ch].size() / 2] != 0.f)) {
+      all_zero = false;
+      break;
+    }
+  }
+  if (all_zero) {
+    *any_filter_consistent = false;
+    *max_echo_path_gain = filter_analysis_states_[0].gain;
+    min_filter_delay_blocks_ = 0;
+    return;
+  }
+
   SetRegionToAnalyze(filters_time_domain[0].size());
   AnalyzeRegion(filters_time_domain, render_buffer);
 
@@ -252,9 +269,10 @@ bool FilterAnalyzer::ConsistentFilterDetector::Detect(
   filter_secondary_peak_ = filter_secondary_peak;
 
   if (region.end_sample_ == filter_to_analyze.size() - 1) {
-    float filter_floor = filter_floor_accum_ /
-                         (filter_floor_low_limit_ + filter_to_analyze.size() -
-                          filter_floor_high_limit_);
+    float filter_floor = FastFloatDiv(
+        filter_floor_accum_,
+        static_cast<float>(filter_floor_low_limit_ + filter_to_analyze.size() -
+                           filter_floor_high_limit_));
 
     float abs_peak = fabsf(filter_to_analyze[peak_index]);
     significant_peak_ = abs_peak > 10.f * filter_floor &&
@@ -266,8 +284,10 @@ bool FilterAnalyzer::ConsistentFilterDetector::Detect(
     for (int ch = 0; ch < x_block.NumChannels(); ++ch) {
       rtc::ArrayView<const float, kBlockSize> x_channel =
           x_block.View(/*band=*/0, ch);
-      const float x_energy = std::inner_product(
-          x_channel.begin(), x_channel.end(), x_channel.begin(), 0.f);
+      float x_energy = 0.f;
+      for (float s : x_channel) {
+        x_energy = FastFloatAddPos(x_energy, FastFloatSqr(s));
+      }
       if (x_energy > active_render_threshold_) {
         active_render_block = true;
         break;

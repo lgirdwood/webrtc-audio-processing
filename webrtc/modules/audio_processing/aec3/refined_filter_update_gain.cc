@@ -97,11 +97,14 @@ void RefinedFilterUpdateGain::Compute(
   } else {
     // Corresponds to WGN of power -39 dBFS.
     std::array<float, kFftLengthBy2Plus1> mu;
+    const float size_partitions_f = static_cast<float>(size_partitions);
     // mu = H_error / (0.5* H_error* X2 + n * E2).
     for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
       if (X2[k] >= current_config_.noise_gate) {
-        mu[k] = H_error_[k] /
-                (0.5f * H_error_[k] * X2[k] + size_partitions * E2_refined[k]);
+        float term1 = FastFloatMul(0.5f, FastFloatMul(H_error_[k], X2[k]));
+        float term2 = FastFloatMul(size_partitions_f, E2_refined[k]);
+        float den = FastFloatAddPos(term1, term2);
+        mu[k] = FastFloatDiv(H_error_[k], den);
       } else {
         mu[k] = 0.f;
       }
@@ -112,7 +115,8 @@ void RefinedFilterUpdateGain::Compute(
 
     // H_error = H_error - 0.5 * mu * X2 * H_error.
     for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-      H_error_[k] -= 0.5f * mu[k] * X2[k] * H_error_[k];
+      float dec = FastFloatMul(0.5f, FastFloatMul(mu[k], FastFloatMul(X2[k], H_error_[k])));
+      H_error_[k] = (H_error_[k] > dec) ? (H_error_[k] - dec) : 0.0f;
     }
 
     // G = mu * E.
@@ -127,7 +131,7 @@ void RefinedFilterUpdateGain::Compute(
     float leakage = (E2_refined[k] <= E2_coarse[k] || disallow_leakage_diverged)
                         ? current_config_.leakage_converged
                         : current_config_.leakage_diverged;
-    H_error_[k] += FastFloatMul(leakage, erl[k]);
+    H_error_[k] = FastFloatAddPos(H_error_[k], FastFloatMul(leakage, erl[k]));
 
     H_error_[k] = std::max(H_error_[k], current_config_.error_floor);
     H_error_[k] = std::min(H_error_[k], current_config_.error_ceil);

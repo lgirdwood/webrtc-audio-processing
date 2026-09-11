@@ -55,8 +55,8 @@ void DominantNearendDetector::Update(
     // Detect strong active nearend if the nearend is sufficiently stronger than
     // the echo and the nearend noise.
     if ((!initial_state || use_during_initial_phase_) &&
-        echo_sum < enr_threshold_ * ne_sum &&
-        ne_sum > snr_threshold_ * noise_sum) {
+        echo_sum < FastFloatMul(enr_threshold_, ne_sum) &&
+        ne_sum > FastFloatMul(snr_threshold_, noise_sum)) {
       if (++trigger_counters_[ch] >= trigger_threshold_) {
         // After a period of strong active nearend activity, flag nearend mode.
         hold_counters_[ch] = hold_duration_;
@@ -68,8 +68,8 @@ void DominantNearendDetector::Update(
     }
 
     // Exit nearend-state early at strong echo.
-    if (echo_sum > enr_exit_threshold_ * ne_sum &&
-        echo_sum > snr_threshold_ * noise_sum) {
+    if (echo_sum > FastFloatMul(enr_exit_threshold_, ne_sum) &&
+        echo_sum > FastFloatMul(snr_threshold_, noise_sum)) {
       hold_counters_[ch] = 0;
     }
 

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <functional>
 
+#include "modules/audio_processing/aec3/aec3_common.h"
 #include "rtc_base/checks.h"
 
 namespace webrtc {
@@ -61,7 +62,7 @@ void CoarseFilterUpdateGain::Compute(
   const auto& X2 = render_power;
   for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
     if (X2[k] > current_config_.noise_gate) {
-      mu[k] = current_config_.rate / X2[k];
+      mu[k] = FastFloatDiv(current_config_.rate, X2[k]);
     } else {
       mu[k] = 0.f;
     }
@@ -72,8 +73,8 @@ void CoarseFilterUpdateGain::Compute(
 
   // G = mu * E * X2.
   for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-    G->re[k] = mu[k] * E_coarse.re[k];
-    G->im[k] = mu[k] * E_coarse.im[k];
+    G->re[k] = FastFloatMul(mu[k], E_coarse.re[k]);
+    G->im[k] = FastFloatMul(mu[k], E_coarse.im[k]);
   }
 }
 

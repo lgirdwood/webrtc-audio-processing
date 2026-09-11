@@ -384,15 +384,29 @@ void EchoRemoverImpl::ProcessCapture(
     uint32_t tb = k_cycle_get_32();
     WindowedPaddedFft(fft_, y->View(/*band=*/0, ch), y_old_[ch], &Y[ch]);
     uint32_t tc = k_cycle_get_32();
-    WindowedPaddedFft(fft_, e[ch], e_old_[ch], &E[ch]);
-    uint32_t td = k_cycle_get_32();
-    for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
-      float yr = Y[ch].re[k], yi = Y[ch].im[k];
-      float er = E[ch].re[k], ei = E[ch].im[k];
-      float dr = yr - er, di = yi - ei;
-      S2_linear[ch][k] = FastMagSqr(dr, di);
-      Y2[ch][k] = FastMagSqr(yr, yi);
-      E2[ch][k] = FastMagSqr(er, ei);
+
+    uint32_t td = tc;
+    if (subtractor_output[ch].s_refined_max_abs == 0.f) {
+      E[ch] = Y[ch];
+      std::copy(y->View(/*band=*/0, ch).begin(), y->View(/*band=*/0, ch).end(),
+                e_old_[ch].begin());
+      S2_linear[ch].fill(0.f);
+      for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+        float mag = FastMagSqr(Y[ch].re[k], Y[ch].im[k]);
+        Y2[ch][k] = mag;
+        E2[ch][k] = mag;
+      }
+    } else {
+      WindowedPaddedFft(fft_, e[ch], e_old_[ch], &E[ch]);
+      td = k_cycle_get_32();
+      for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+        float yr = Y[ch].re[k], yi = Y[ch].im[k];
+        float er = E[ch].re[k], ei = E[ch].im[k];
+        float dr = yr - er, di = yi - ei;
+        S2_linear[ch][k] = FastMagSqr(dr, di);
+        Y2[ch][k] = FastMagSqr(yr, yi);
+        E2[ch][k] = FastMagSqr(er, ei);
+      }
     }
     uint32_t te = k_cycle_get_32();
     t_form += (tb - ta);

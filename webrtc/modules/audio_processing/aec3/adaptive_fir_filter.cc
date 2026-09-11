@@ -45,10 +45,19 @@ void ComputeFrequencyResponse(
   for (size_t p = 0; p < num_partitions; ++p) {
     RTC_DCHECK_EQ(kFftLengthBy2Plus1, (*H2)[p].size());
     for (size_t ch = 0; ch < num_render_channels; ++ch) {
-      for (size_t j = 0; j < kFftLengthBy2Plus1; ++j) {
-        float tmp = FastMagSqr(H[p][ch].re[j], H[p][ch].im[j]);
-        (*H2)[p][j] = std::max((*H2)[p][j], tmp);
+      size_t j = 0;
+      for (; j < kFftLengthBy2; j += 4) {
+        float tmp0 = FastMagSqr(H[p][ch].re[j], H[p][ch].im[j]);
+        (*H2)[p][j] = std::max((*H2)[p][j], tmp0);
+        float tmp1 = FastMagSqr(H[p][ch].re[j + 1], H[p][ch].im[j + 1]);
+        (*H2)[p][j + 1] = std::max((*H2)[p][j + 1], tmp1);
+        float tmp2 = FastMagSqr(H[p][ch].re[j + 2], H[p][ch].im[j + 2]);
+        (*H2)[p][j + 2] = std::max((*H2)[p][j + 2], tmp2);
+        float tmp3 = FastMagSqr(H[p][ch].re[j + 3], H[p][ch].im[j + 3]);
+        (*H2)[p][j + 3] = std::max((*H2)[p][j + 3], tmp3);
       }
+      float tmp = FastMagSqr(H[p][ch].re[j], H[p][ch].im[j]);
+      (*H2)[p][j] = std::max((*H2)[p][j], tmp);
     }
   }
 }
@@ -141,10 +150,19 @@ void AdaptPartitions(const RenderBuffer& render_buffer,
       const float* __restrict xim = render_buffer_data[index][ch].im.data();
       float* __restrict hre = (*H)[p][ch].re.data();
       float* __restrict him = (*H)[p][ch].im.data();
-      for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      size_t k = 0;
+      for (; k < kFftLengthBy2; k += 4) {
         hre[k] += FastFloatMul(xre[k], gre[k]) + FastFloatMul(xim[k], gim[k]);
         him[k] += FastFloatMul(xre[k], gim[k]) - FastFloatMul(xim[k], gre[k]);
+        hre[k + 1] += FastFloatMul(xre[k + 1], gre[k + 1]) + FastFloatMul(xim[k + 1], gim[k + 1]);
+        him[k + 1] += FastFloatMul(xre[k + 1], gim[k + 1]) - FastFloatMul(xim[k + 1], gre[k + 1]);
+        hre[k + 2] += FastFloatMul(xre[k + 2], gre[k + 2]) + FastFloatMul(xim[k + 2], gim[k + 2]);
+        him[k + 2] += FastFloatMul(xre[k + 2], gim[k + 2]) - FastFloatMul(xim[k + 2], gre[k + 2]);
+        hre[k + 3] += FastFloatMul(xre[k + 3], gre[k + 3]) + FastFloatMul(xim[k + 3], gim[k + 3]);
+        him[k + 3] += FastFloatMul(xre[k + 3], gim[k + 3]) - FastFloatMul(xim[k + 3], gre[k + 3]);
       }
+      hre[k] += FastFloatMul(xre[k], gre[k]) + FastFloatMul(xim[k], gim[k]);
+      him[k] += FastFloatMul(xre[k], gim[k]) - FastFloatMul(xim[k], gre[k]);
     }
     index = index < (render_buffer_data.size() - 1) ? index + 1 : 0;
   }
@@ -307,10 +325,19 @@ void ApplyFilter(const RenderBuffer& render_buffer,
       const float* __restrict xim = render_buffer_data[index][ch].im.data();
       const float* __restrict hre = H[p][ch].re.data();
       const float* __restrict him = H[p][ch].im.data();
-      for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
+      size_t k = 0;
+      for (; k < kFftLengthBy2; k += 4) {
         sre[k] += FastFloatMul(xre[k], hre[k]) - FastFloatMul(xim[k], him[k]);
         sim[k] += FastFloatMul(xre[k], him[k]) + FastFloatMul(xim[k], hre[k]);
+        sre[k + 1] += FastFloatMul(xre[k + 1], hre[k + 1]) - FastFloatMul(xim[k + 1], him[k + 1]);
+        sim[k + 1] += FastFloatMul(xre[k + 1], him[k + 1]) + FastFloatMul(xim[k + 1], hre[k + 1]);
+        sre[k + 2] += FastFloatMul(xre[k + 2], hre[k + 2]) - FastFloatMul(xim[k + 2], him[k + 2]);
+        sim[k + 2] += FastFloatMul(xre[k + 2], him[k + 2]) + FastFloatMul(xim[k + 2], hre[k + 2]);
+        sre[k + 3] += FastFloatMul(xre[k + 3], hre[k + 3]) - FastFloatMul(xim[k + 3], him[k + 3]);
+        sim[k + 3] += FastFloatMul(xre[k + 3], him[k + 3]) + FastFloatMul(xim[k + 3], hre[k + 3]);
       }
+      sre[k] += FastFloatMul(xre[k], hre[k]) - FastFloatMul(xim[k], him[k]);
+      sim[k] += FastFloatMul(xre[k], him[k]) + FastFloatMul(xim[k], hre[k]);
     }
     index = index < (render_buffer_data.size() - 1) ? index + 1 : 0;
   }

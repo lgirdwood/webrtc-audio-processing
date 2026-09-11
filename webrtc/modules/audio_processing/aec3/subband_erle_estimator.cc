@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <functional>
 
+#include "modules/audio_processing/aec3/aec3_common.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/numerics/safe_minmax.h"
 #include "system_wrappers/include/field_trial.h"
@@ -125,7 +126,7 @@ void SubbandErleEstimator::UpdateBands(
 
     for (size_t k = 1; k < kFftLengthBy2; ++k) {
       if (accum_spectra_.E2[ch][k] > 0.f) {
-        new_erle[k] = accum_spectra_.Y2[ch][k] / accum_spectra_.E2[ch][k];
+        new_erle[k] = FastFloatDiv(accum_spectra_.Y2[ch][k], accum_spectra_.E2[ch][k]);
         is_erle_updated[k] = true;
       }
     }

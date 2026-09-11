@@ -86,7 +86,8 @@ void LinearEstimate(
   for (size_t ch = 0; ch < num_capture_channels; ++ch) {
     for (size_t k = 0; k < kFftLengthBy2Plus1; ++k) {
       RTC_DCHECK_LT(0.f, erle[ch][k]);
-      R2[ch][k] = S2_linear[ch][k] / erle[ch][k];
+      float s2 = S2_linear[ch][k];
+      R2[ch][k] = (s2 > 0.f) ? FastFloatDiv(s2, erle[ch][k]) : 0.f;
     }
   }
 }

@@ -64,12 +64,19 @@ void FullBandErleEstimator::Update(
   for (size_t ch = 0; ch < Y2.size(); ++ch) {
     if (converged_filters[ch]) {
       // Computes the fullband ERLE.
-      const float X2_sum = std::accumulate(X2.begin(), X2.end(), 0.0f);
+      float X2_sum = 0.0f;
+      for (float x : X2) {
+        X2_sum = FastFloatAddPos(X2_sum, x);
+      }
       if (X2_sum > kX2BandEnergyThreshold * X2.size()) {
-        const float Y2_sum =
-            std::accumulate(Y2[ch].begin(), Y2[ch].end(), 0.0f);
-        const float E2_sum =
-            std::accumulate(E2[ch].begin(), E2[ch].end(), 0.0f);
+        float Y2_sum = 0.0f;
+        for (float y : Y2[ch]) {
+          Y2_sum = FastFloatAddPos(Y2_sum, y);
+        }
+        float E2_sum = 0.0f;
+        for (float e : E2[ch]) {
+          E2_sum = FastFloatAddPos(E2_sum, e);
+        }
         if (instantaneous_erle_[ch].Update(Y2_sum, E2_sum)) {
           hold_counters_instantaneous_erle_[ch] = kBlocksToHoldErle;
           erle_time_domain_log2_[ch] +=
@@ -120,7 +127,7 @@ bool FullBandErleEstimator::ErleInstantaneous::Update(const float Y2_sum,
   if (num_points_ == kPointsToAccumulate) {
     if (E2_acum_ > 0.f) {
       update_estimates = true;
-      erle_log2_ = FastApproxLog2f(Y2_acum_ / E2_acum_ + kEpsilon);
+      erle_log2_ = FastApproxLog2f(FastFloatDiv(Y2_acum_, E2_acum_) + kEpsilon);
     }
     num_points_ = 0;
     E2_acum_ = 0.f;
