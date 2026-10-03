@@ -1,0 +1,30 @@
+From 78698513178700e6df8cc964653854b060f694b9 Mon Sep 17 00:00:00 2001
+From: Liam Girdwood <liam.r.girdwood@linux.intel.com>
+Date: Sat, 3 Oct 2026 10:36:01 +0100
+Subject: [PATCH] arch.h: Add Xtensa 32-bit LE support
+
+Define WEBRTC_ARCH_XTENSA_FAMILY, WEBRTC_ARCH_XTENSA, WEBRTC_ARCH_32_BITS,
+and WEBRTC_ARCH_LITTLE_ENDIAN when __XTENSA__ or __xtensa__ is defined.
+---
+ webrtc/rtc_base/system/arch.h | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/webrtc/rtc_base/system/arch.h b/webrtc/rtc_base/system/arch.h
+index 78cb2b6..38a3a4e 100644
+--- a/webrtc/rtc_base/system/arch.h
++++ b/webrtc/rtc_base/system/arch.h
+@@ -88,6 +88,11 @@
+ #define WEBRTC_ARCH_S390X
+ #define WEBRTC_ARCH_64_BITS
+ #define WEBRTC_ARCH_BIG_ENDIAN
++#elif defined(__XTENSA__) || defined(__xtensa__)
++#define WEBRTC_ARCH_XTENSA_FAMILY
++#define WEBRTC_ARCH_XTENSA
++#define WEBRTC_ARCH_32_BITS
++#define WEBRTC_ARCH_LITTLE_ENDIAN
+ #elif defined(__pnacl__)
+ #define WEBRTC_ARCH_32_BITS
+ #define WEBRTC_ARCH_LITTLE_ENDIAN
+-- 
+2.53.0
+
